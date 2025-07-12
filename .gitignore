@@ -1,1 +1,10 @@
 /vendor/
+/node_modules/
+/.idea/
+/.vscode/
+*.log
+*.zip
+*.bak
+*.tmp
+.DS_Store
+.env
