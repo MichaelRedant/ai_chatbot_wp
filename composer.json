@@ -1,0 +1,20 @@
+{
+    "name": "donmi/octopus-ai-chatbot",
+    "autoload": {
+        "psr-4": {
+            "Donmi\\OctopusAiChatbot\\": "src/"
+        }
+    },
+    "authors": [
+        {
+            "name": "MichaelRedant",
+            "email": "donmichaelR@gmail.com"
+        }
+    ],
+    "require": {
+        "smalot/pdfparser": "^2.12"
+    },
+    "require-dev": {
+        "php-stubs/wordpress-stubs": "^6.8"
+    }
+}
