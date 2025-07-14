@@ -3,19 +3,22 @@ document.addEventListener('DOMContentLoaded', function () {
     // ✅ Dynamische instellingen ophalen
     fetch(octopus_ai_chatbot_vars.ajaxurl + '?action=octopus_ai_get_settings')
         .then(response => response.json())
-        .then(settings => {
-            document.documentElement.style.setProperty('--primary-color', settings.primary_color);
-            document.querySelector('#chat-header').innerText = settings.brand_name;
+        .then(response => {
+            if (response.success) {
+                const settings = response.data;
+                document.documentElement.style.setProperty('--primary-color', settings.primary_color);
+                document.querySelector('#chat-header').innerText = settings.brand_name;
+            }
         })
         .catch(error => console.error('Instellingen laden mislukt', error));
 
-    // ✅ Toggle button genereren
+    // ✅ Toggle knop
     const toggleButton = document.createElement('div');
     toggleButton.id = 'octopus-chat-toggle';
     toggleButton.innerHTML = `<img src="${octopus_ai_chatbot_vars.logo_url}" alt="Chatbot">`;
     document.body.appendChild(toggleButton);
 
-    // ✅ Chatbot venster genereren
+    // ✅ Chatvenster
     const chatbot = document.createElement('div');
     chatbot.id = 'octopus-chatbot';
     chatbot.innerHTML = `
@@ -29,30 +32,33 @@ document.addEventListener('DOMContentLoaded', function () {
             <button id="chat-send">Verstuur</button>
         </div>
     `;
+
+    // ✅ Branding footer
     const poweredBy = document.createElement('div');
-poweredBy.id = 'octopus-chat-powered-by';
-poweredBy.innerHTML = `<small>Powered by <a href="https://www.xinudesign.be" target="_blank" style="color: #999; text-decoration: none;">Xinudesign</a></small>`;
-chatbot.appendChild(poweredBy);
+    poweredBy.id = 'octopus-chat-powered-by';
+    poweredBy.innerHTML = `<small>Powered by <a href="https://www.xinudesign.be" target="_blank" style="color:#999; text-decoration:none;">Xinudesign</a></small>`;
+    chatbot.appendChild(poweredBy);
 
     document.body.appendChild(chatbot);
 
     const chatMessages = document.getElementById('chat-messages');
-    const chatInput = document.getElementById('chat-input');
-    const chatSend = document.getElementById('chat-send');
-    const chatClose = document.getElementById('chat-close');
+    const chatInput    = document.getElementById('chat-input');
+    const chatSend     = document.getElementById('chat-send');
+    const chatClose    = document.getElementById('chat-close');
 
-    // ✅ Messages behouden tijdens sessie
+    // ✅ Historiek herstellen
     if (sessionStorage.getItem('octopus_chat_history')) {
         chatMessages.innerHTML = sessionStorage.getItem('octopus_chat_history');
     }
 
-    // ✅ Openen via toggle
+    // ✅ Open chatbot
     toggleButton.addEventListener('click', () => {
-        chatbot.classList.add('fade-in');
         chatbot.classList.remove('fade-out');
+        chatbot.classList.add('fade-in');
         chatbot.style.display = 'flex';
         toggleButton.style.display = 'none';
 
+        // Welkomstbericht tonen
         if (octopus_ai_chatbot_vars.welcome_message && !sessionStorage.getItem('octopus_chat_welcomed')) {
             setTimeout(() => {
                 addMessage(octopus_ai_chatbot_vars.welcome_message, 'bot');
@@ -65,14 +71,13 @@ chatbot.appendChild(poweredBy);
     // ✅ Sluiten via X
     chatClose.addEventListener('click', closeChatbot);
 
-    // ✅ Klik buiten de chatbot sluit deze (optioneel)
+    // ✅ Buiten klikken sluit chatbot
     document.addEventListener('click', function (e) {
         if (chatbot.style.display === 'flex' && !chatbot.contains(e.target) && !toggleButton.contains(e.target)) {
             closeChatbot();
         }
     });
 
-    // ✅ Functie om chatbot te sluiten
     function closeChatbot() {
         chatbot.classList.remove('fade-in');
         chatbot.classList.add('fade-out');
@@ -82,7 +87,7 @@ chatbot.appendChild(poweredBy);
         }, 300);
     }
 
-    // ✅ Verzenden van berichten
+    // ✅ Bericht verzenden
     chatSend.addEventListener('click', sendMessage);
     chatInput.addEventListener('keypress', function (e) {
         if (e.key === 'Enter') {
@@ -91,19 +96,37 @@ chatbot.appendChild(poweredBy);
         }
     });
 
+    // ✅ Bericht tonen in UI
     function addMessage(content, sender = 'user') {
-        const message = document.createElement('div');
-        message.classList.add(sender === 'user' ? 'user-message' : 'bot-message');
-        message.textContent = content;
-        chatMessages.appendChild(message);
-        chatMessages.scrollTop = chatMessages.scrollHeight;
-        saveChatHistory();
+    const message = document.createElement('div');
+    message.classList.add(sender === 'user' ? 'user-message' : 'bot-message');
+
+    // Markdown naar HTML + dubbele slash verwijderen
+    const html = content
+        .replace(/\\n/g, '<br>')
+        .replace(/\\(.)/g, '$1') // verwijder escapes zoals \"
+        .replace(/\[([^\]]+)]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
+
+    message.innerHTML = html;
+    chatMessages.appendChild(message);
+    chatMessages.scrollTop = chatMessages.scrollHeight;
+    saveChatHistory();
+}
+
+
+    // ✅ Markdown → HTML (klikbare links, linebreaks)
+    function markdownToHtml(text) {
+        return text
+            .replace(/\n/g, '<br>')
+            .replace(/\[([^\]]+)]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
     }
 
+    // ✅ Save sessie
     function saveChatHistory() {
         sessionStorage.setItem('octopus_chat_history', chatMessages.innerHTML);
     }
 
+    // ✅ AI verzenden & ontvangen
     async function sendMessage() {
         const message = chatInput.value.trim();
         if (!message) return;
@@ -120,7 +143,7 @@ chatbot.appendChild(poweredBy);
             const response = await fetch('/wp-json/octopus-ai/v1/chatbot', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ message: message })
+                body: JSON.stringify({ message })
             });
             const data = await response.text();
             typing.remove();

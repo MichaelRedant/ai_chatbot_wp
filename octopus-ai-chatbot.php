@@ -6,10 +6,9 @@ Version: 0.1
 Author: Michaël Redant
 */
 
-// Veiligheid
-if (!defined('ABSPATH')) exit;
+if (!defined('ABSPATH')) exit; // Veiligheid
 
-// ✅ Admin pages laden
+// ✅ Admin pagina’s
 require_once plugin_dir_path(__FILE__) . 'admin/settings-page.php';
 require_once plugin_dir_path(__FILE__) . 'admin/upload-page.php';
 require_once plugin_dir_path(__FILE__) . 'admin/logs-page.php';
@@ -21,48 +20,42 @@ require_once plugin_dir_path(__FILE__) . 'includes/chunker.php';
 require_once plugin_dir_path(__FILE__) . 'includes/context-retriever.php';
 require_once plugin_dir_path(__FILE__) . 'includes/logger.php';
 
+
+// ✅ Bepaal of de chatbot op deze pagina zichtbaar moet zijn
 function octopus_ai_should_display_chatbot() {
     $mode = get_option('octopus_ai_display_mode', 'all');
+    if ($mode === 'all') return true;
 
-    if ($mode === 'all') {
-        return true;
-    } elseif ($mode === 'selected') {
+    if ($mode === 'selected') {
         $selected_pages = get_option('octopus_ai_selected_pages', array());
-        if (is_page($selected_pages)) {
-            return true;
-        } else {
-            return false;
-        }
+        return is_page($selected_pages);
     }
 
     return true;
 }
 
-
-// ✅ Frontend assets laden en ajaxurl beschikbaar maken
+// ✅ Frontend scripts + wp_localize_script met settings
 function octopus_ai_enqueue_frontend_assets() {
     wp_enqueue_style('octopus-ai-chatbot-style', plugin_dir_url(__FILE__) . 'assets/css/chatbot.css', array(), '1.0');
     wp_enqueue_script('octopus-ai-chatbot-script', plugin_dir_url(__FILE__) . 'assets/js/chatbot.js', array('jquery'), '1.0', true);
-    
 
-    // Ajaxurl en instellingen beschikbaar maken voor frontend
+    // Chatbot settings beschikbaar maken in JS
     wp_localize_script('octopus-ai-chatbot-script', 'octopus_ai_chatbot_vars', array(
-    'ajaxurl' => admin_url('admin-ajax.php'),
-    'logo_url' => get_option('octopus_ai_logo_url', 'https://www.octopus.be/wp-content/uploads/2025/04/web-app-manifest-512x512-1.webp'),
-    'welcome_message' => get_option('octopus_ai_welcome_message', '👋 Hallo! Hoe kan ik je vandaag helpen?'),
-));
-
+        'ajaxurl'          => admin_url('admin-ajax.php'),
+        'logo_url'         => get_option('octopus_ai_logo_url', 'https://www.octopus.be/wp-content/uploads/2025/04/web-app-manifest-512x512-1.webp'),
+        'welcome_message'  => get_option('octopus_ai_welcome_message', '👋 Hallo! Hoe kan ik je vandaag helpen?'),
+        'brand_name'       => get_option('octopus_ai_brand_name', 'AI Chatbot')
+    ));
 }
-add_action('wp_enqueue_scripts', function() {
+
+add_action('wp_enqueue_scripts', function () {
     if (octopus_ai_should_display_chatbot()) {
         octopus_ai_enqueue_frontend_assets();
     }
 });
 
-
-
-// ✅ Admin submenu voor logs
-add_action('admin_menu', function() {
+// ✅ Submenu “Logs” in admin
+add_action('admin_menu', function () {
     add_submenu_page(
         'octopus-ai-chatbot',
         'Chatbot Logs',
@@ -73,7 +66,7 @@ add_action('admin_menu', function() {
     );
 });
 
-// ✅ Database table voor logs bij activatie
+// ✅ Database tabel voor logs bij activatie aanmaken
 function octopus_ai_create_logs_table() {
     global $wpdb;
     $table_name = $wpdb->prefix . 'octopus_ai_logs';
@@ -90,7 +83,7 @@ function octopus_ai_create_logs_table() {
         ip_address VARCHAR(45)
     ) $charset_collate;";
 
-    require_once(ABSPATH . 'wp-admin/includes/upgrade.php');
+    require_once ABSPATH . 'wp-admin/includes/upgrade.php';
     dbDelta($sql);
 }
 register_activation_hook(__FILE__, 'octopus_ai_create_logs_table');
