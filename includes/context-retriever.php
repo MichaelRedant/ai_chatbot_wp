@@ -70,7 +70,8 @@ function octopus_ai_retrieve_relevant_chunks($question) {
         if (strlen($context . "\n" . $chunk['content']) > $max_context_length) {
             break;
         }
-        $context .= $chunk['content'] . "\n";
+       $clean_content = preg_replace('/##.*?:.*?(\\n|$)/', '', $chunk['content']);
+$context .= $clean_content . "\n";
     }
 
     // Logging voor debug en analyse

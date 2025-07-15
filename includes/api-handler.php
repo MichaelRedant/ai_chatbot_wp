@@ -67,21 +67,36 @@ function octopus_ai_chatbot_callback($request)
     );
 
     $response = wp_remote_post('https://api.openai.com/v1/chat/completions', array(
-        'headers' => array(
-            'Content-Type'  => 'application/json',
-            'Authorization' => 'Bearer ' . $api_key,
-        ),
-        'body' => wp_json_encode($data),
-    ));
+    'headers' => array(
+        'Content-Type'  => 'application/json',
+        'Authorization' => 'Bearer ' . $api_key,
+    ),
+    'body' => wp_json_encode($data),
+    'timeout' => 30,
+));
 
-    // ❌ Error fallback
-    if (is_wp_error($response)) {
-        return new WP_Error('api_error', 'Er ging iets mis bij het ophalen van het antwoord.');
-    }
+// ❌ Technische fout (timeout, internet, API key fout)
+if (is_wp_error($response)) {
+    error_log('[Octopus AI] WP Error: ' . $response->get_error_message());
+    return new WP_Error('api_error', 'Technische fout bij het ophalen van het antwoord.');
+}
 
-    $body   = json_decode(wp_remote_retrieve_body($response), true);
-    $answer = $body['choices'][0]['message']['content'] ?? '';
-    $status = $answer ? 'success' : 'fail';
+// ✅ JSON body parsen
+$body_json = wp_remote_retrieve_body($response);
+$body      = json_decode($body_json, true);
+
+// ❌ Fout van OpenAI zelf (rate limit, invalid key, etc)
+if (!isset($body['choices'][0]['message']['content'])) {
+    $error_message = isset($body['error']['message']) ? $body['error']['message'] : 'Ongeldige API-respons.';
+    error_log('[Octopus AI] OpenAI fout: ' . $error_message);
+    error_log('[Octopus AI] Body: ' . $body_json);
+    return new WP_Error('api_error', 'Fout van OpenAI: ' . $error_message);
+}
+
+// ✅ Geldig antwoord
+$answer = $body['choices'][0]['message']['content'];
+$status = 'success';
+
 
     // ✅ Logging
     if (function_exists('octopus_ai_log_interaction')) {

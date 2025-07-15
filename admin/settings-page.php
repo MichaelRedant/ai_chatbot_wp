@@ -2,9 +2,9 @@
 // Veiligheid
 if (!defined('ABSPATH')) exit;
 
-/**
- * Voeg menu toe aan WordPress dashboard
- */
+use OctopusAI\Includes\Chunker;
+
+// --- ADMIN MENU ---
 add_action('admin_menu', 'octopus_ai_add_admin_menu');
 function octopus_ai_add_admin_menu() {
     add_menu_page(
@@ -18,9 +18,7 @@ function octopus_ai_add_admin_menu() {
     );
 }
 
-/**
- * Enqueue scripts en media uploader
- */
+// --- ADMIN SCRIPTS ---
 add_action('admin_enqueue_scripts', function($hook) {
     if ($hook === 'toplevel_page_octopus-ai-chatbot') {
         wp_enqueue_style('wp-color-picker');
@@ -31,9 +29,7 @@ add_action('admin_enqueue_scripts', function($hook) {
     }
 });
 
-/**
- * Registreer instellingen
- */
+// --- INSTELLINGEN ---
 add_action('admin_init', 'octopus_ai_register_settings');
 function octopus_ai_register_settings() {
     register_setting('octopus_ai_settings_group', 'octopus_ai_api_key', 'sanitize_text_field');
@@ -49,9 +45,7 @@ function octopus_ai_register_settings() {
     });
 }
 
-/**
- * Verwerk PDF upload
- */
+// --- PDF UPLOAD + CHUNKING ---
 add_action('admin_post_octopus_ai_pdf_upload', 'octopus_ai_handle_pdf_upload');
 function octopus_ai_handle_pdf_upload() {
     if (
@@ -68,7 +62,14 @@ function octopus_ai_handle_pdf_upload() {
 
     $upload_dir = wp_upload_dir();
     $upload_path = trailingslashit($upload_dir['basedir']) . 'octopus-chatbot/';
+    $chunks_dir = trailingslashit($upload_dir['basedir']) . 'octopus-ai-chunks/';
     if (!file_exists($upload_path)) wp_mkdir_p($upload_path);
+    if (!file_exists($chunks_dir)) wp_mkdir_p($chunks_dir);
+
+    // Verwijder oude chunks
+    foreach (glob($chunks_dir . '*.txt') as $old_chunk) {
+        unlink($old_chunk);
+    }
 
     $files = $_FILES['octopus_ai_pdf_upload'];
 
@@ -78,9 +79,22 @@ function octopus_ai_handle_pdf_upload() {
             $filepath = $upload_path . $filename;
 
             if (move_uploaded_file($files['tmp_name'][$index], $filepath)) {
-                $parsed_text = octopus_parse_pdf_to_text($filepath);
-                octopus_chunk_pdf_text($parsed_text);
-                file_put_contents($upload_path . 'handleiding.txt', $parsed_text);
+                $slug = basename($filename, '.pdf');
+                $chunker = new Chunker();
+                $chunks = $chunker->chunkPdfWithMetadata($filepath, $slug);
+
+                foreach ($chunks as $i => $chunk) {
+                    $meta = $chunk['metadata'];
+                    $file = $chunks_dir . 'chunk_' . ($i + 1) . '.txt';
+
+                    $text = $chunk['content'] . PHP_EOL .
+                        '##source_title:' . $meta['source_title'] . PHP_EOL .
+                        '##page_slug:' . $meta['page_slug'] . PHP_EOL .
+                        '##original_page:' . $meta['original_page'] . PHP_EOL .
+                        '##section_title:' . $meta['section_title'];
+
+                    file_put_contents($file, $text);
+                }
             }
         }
     }
@@ -89,9 +103,7 @@ function octopus_ai_handle_pdf_upload() {
     exit;
 }
 
-/**
- * Verwijderen bestanden
- */
+// --- BESTAND VERWIJDEREN ---
 add_action('admin_post_octopus_ai_delete_file', 'octopus_ai_handle_delete_file');
 function octopus_ai_handle_delete_file() {
     if (
@@ -115,6 +127,7 @@ function octopus_ai_handle_delete_file() {
     exit;
 }
 
+// --- BULK DELETE ---
 add_action('admin_post_octopus_ai_bulk_delete', 'octopus_ai_handle_bulk_delete');
 function octopus_ai_handle_bulk_delete() {
     if (
@@ -143,10 +156,7 @@ function octopus_ai_handle_bulk_delete() {
     exit;
 }
 
-
-/**
- * Instellingenpagina HTML
- */
+// --- ADMIN PAGE HTML ---
 function octopus_ai_settings_page() {
     $upload_dir = wp_upload_dir();
     $upload_path = trailingslashit($upload_dir['basedir']) . 'octopus-chatbot/';
@@ -213,67 +223,48 @@ function octopus_ai_settings_page() {
     </form>
 
     <h2>Geüploade Bestanden</h2>
-
-<?php if (isset($_GET['bulk_delete'])): ?>
-    <div style="padding:10px;background:#d4edda;color:#155724;border-left:4px solid #28a745;margin-bottom:15px;">
-        <?php echo intval($_GET['bulk_delete']); ?> bestand(en) succesvol verwijderd.
-    </div>
-<?php endif; ?>
-
-<?php
-if (file_exists($upload_path)) {
-    $files = glob($upload_path . '*');
-    if ($files) {
-        echo '<form method="post" action="' . esc_url(admin_url('admin-post.php')) . '">';
-        wp_nonce_field('octopus_ai_bulk_delete', 'octopus_ai_bulk_delete_nonce');
-        echo '<input type="hidden" name="action" value="octopus_ai_bulk_delete">';
-        echo '<ul>';
-        foreach ($files as $file) {
-            $filename = basename($file);
-            $delete_url = wp_nonce_url(
-                admin_url('admin-post.php?action=octopus_ai_delete_file&file=' . urlencode($filename)),
-                'octopus_ai_delete_file'
-            );
-            echo '<li>';
-            echo '<label><input type="checkbox" name="octopus_ai_files[]" value="' . esc_attr($filename) . '"> ';
-            echo '<a href="' . esc_url($upload_url . $filename) . '" target="_blank">' . esc_html($filename) . '</a></label> ';
-            echo '<a href="' . esc_url($delete_url) . '" style="color:red;margin-left:10px;" onclick="return confirm(\'Weet je zeker dat je dit bestand wilt verwijderen?\');">Verwijderen</a>';
-            echo '</li>';
+    <?php if (isset($_GET['bulk_delete'])): ?>
+        <div class="notice notice-success is-dismissible">
+            <p><?php echo intval($_GET['bulk_delete']); ?> bestand(en) succesvol verwijderd.</p>
+        </div>
+    <?php endif; ?>
+    <?php
+    if (file_exists($upload_path)) {
+        $files = glob($upload_path . '*');
+        if ($files) {
+            echo '<form method="post" action="' . esc_url(admin_url('admin-post.php')) . '">';
+            wp_nonce_field('octopus_ai_bulk_delete', 'octopus_ai_bulk_delete_nonce');
+            echo '<input type="hidden" name="action" value="octopus_ai_bulk_delete">';
+            echo '<ul>';
+            foreach ($files as $file) {
+                $filename = basename($file);
+                $delete_url = wp_nonce_url(
+                    admin_url('admin-post.php?action=octopus_ai_delete_file&file=' . urlencode($filename)),
+                    'octopus_ai_delete_file'
+                );
+                echo '<li>';
+                echo '<label><input type="checkbox" name="octopus_ai_files[]" value="' . esc_attr($filename) . '"> ';
+                echo '<a href="' . esc_url($upload_url . $filename) . '" target="_blank">' . esc_html($filename) . '</a></label> ';
+                echo '<a href="' . esc_url($delete_url) . '" style="color:red;margin-left:10px;" onclick="return confirm(\'Weet je zeker dat je dit bestand wilt verwijderen?\');">Verwijderen</a>';
+                echo '</li>';
+            }
+            echo '</ul>';
+            echo '<p><input type="submit" class="button button-secondary" value="Geselecteerde bestanden verwijderen" onclick="return confirm(\'Weet je zeker dat je deze bestanden wilt verwijderen?\');"></p>';
+            echo '</form>';
+        } else {
+            echo '<p>Er zijn nog geen bestanden geüpload.</p>';
         }
-        echo '</ul>';
-        echo '<p><input type="submit" class="button button-secondary" value="Geselecteerde bestanden verwijderen" onclick="return confirm(\'Weet je zeker dat je deze bestanden wilt verwijderen?\');"></p>';
-        echo '</form>';
     } else {
         echo '<p>Er zijn nog geen bestanden geüpload.</p>';
     }
-} else {
-    echo '<p>Er zijn nog geen bestanden geüpload.</p>';
-}
-?>
-    </ul>
-
+    ?>
     <hr>
-
-    <div style="background:#fff;border:1px solid #ddd;padding:20px;border-radius:8px;max-width:600px;margin:0 auto;text-align:center;">
-        <h2 style="margin:0;color:#0f6c95;">Ontwikkeld door <strong>Michaël Redant</strong></h2>
-        <p style="font-size:14px;line-height:1.6;">Deze plugin werd ontwikkeld door <strong>Xinudesign</strong>, jouw partner in AI-oplossingen en WordPress maatwerk.
-        Beheer persona’s slim via <a href="https://www.xinudesign.be/vault/" target="_blank">Persona Vault</a>.</p>
-        <div style="margin-top:15px;">
-            <a href="https://xinudesign.be" class="button button-primary" target="_blank">🌐 Xinudesign</a>
-            <a href="https://xinudesign.be/vault/" class="button" target="_blank">🧩 Persona Vault</a>
-            <a href="https://x3dprints.be" class="button" target="_blank">🖨️ X3DPrints</a>
-        </div>
-        <p style="font-size:13px;color:#555;margin-top:15px;">📧 Contact: <a href="mailto:michael@xinudesign.be">michael@xinudesign.be</a></p>
-        <p style="font-size:11px;color:#999;">Powered by Xinudesign</p>
-    </div>
-
-    <script>
-        document.getElementById('octopus_ai_display_mode').addEventListener('change', function() {
-            const row = document.getElementById('octopus_ai_page_selector_row');
-            row.style.display = this.value === 'selected' ? '' : 'none';
-        });
-    </script>
 </div>
-<?php
-}
-?>
+
+<script>
+    document.getElementById('octopus_ai_display_mode').addEventListener('change', function() {
+        const row = document.getElementById('octopus_ai_page_selector_row');
+        row.style.display = this.value === 'selected' ? '' : 'none';
+    });
+</script>
+<?php } ?>
