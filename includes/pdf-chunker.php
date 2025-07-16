@@ -7,6 +7,8 @@ require_once __DIR__ . '/../vendor/autoload.php';
 
 use Smalot\PdfParser\Parser;
 
+if (!class_exists('OctopusAI\Includes\Chunker')) {
+
 class Chunker
 {
     private $chunkSize;
@@ -111,4 +113,5 @@ class Chunker
 
         return $chunks;
     }
+}
 }
