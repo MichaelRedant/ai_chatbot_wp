@@ -2,7 +2,7 @@
 /*
 Plugin Name: Octopus AI Chatbot
 Description: Een AI Chatbot voor Octopus, volledig geïntegreerd in WordPress.
-Version: 0.1
+Version: 0.2
 Author: Michaël Redant
 */
 
@@ -23,6 +23,13 @@ require_once plugin_dir_path(__FILE__) . 'includes/logger.php';
 
 // ✅ Bepaal of de chatbot op deze pagina zichtbaar moet zijn
 function octopus_ai_should_display_chatbot() {
+    // 👨‍🔧 Alleen admins zien de chatbot als testmodus actief is
+    $test_mode = get_option('octopus_ai_test_mode', 0);
+    if ($test_mode && !current_user_can('manage_options')) {
+        return false;
+    }
+
+    // 🧩 Normale weergavelogica
     $mode = get_option('octopus_ai_display_mode', 'all');
     if ($mode === 'all') return true;
 
