@@ -12,6 +12,9 @@ if (!defined('ABSPATH')) exit; // Veiligheid
 require_once plugin_dir_path(__FILE__) . 'admin/settings-page.php';
 require_once plugin_dir_path(__FILE__) . 'admin/upload-page.php';
 require_once plugin_dir_path(__FILE__) . 'admin/logs-page.php';
+require_once plugin_dir_path(__FILE__) . 'admin/sitemap-handler.php';
+
+
 
 // ✅ Includes
 require_once plugin_dir_path(__FILE__) . 'includes/api-handler.php';
@@ -19,6 +22,8 @@ require_once plugin_dir_path(__FILE__) . 'includes/pdf-parser.php';
 require_once plugin_dir_path(__FILE__) . 'includes/chunker.php';
 require_once plugin_dir_path(__FILE__) . 'includes/context-retriever.php';
 require_once plugin_dir_path(__FILE__) . 'includes/logger.php';
+require_once plugin_dir_path(__FILE__) . 'includes/sitemap-parser.php';
+
 
 
 // ✅ Bepaal of de chatbot op deze pagina zichtbaar moet zijn

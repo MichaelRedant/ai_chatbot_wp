@@ -2,6 +2,7 @@
 // Veiligheid
 if (!defined('ABSPATH')) exit;
 
+
 use OctopusAI\Includes\Chunker;
 
 // --- ADMIN MENU ---
@@ -317,6 +318,112 @@ function octopus_ai_settings_page() {
             <?php submit_button('Upload PDF'); ?>
         </form>
 
+        <hr>
+
+        <h2 id="sitemap-zone">🗺️ Upload sitemap.xml</h2>
+<form method="post" action="<?php echo admin_url('admin-post.php'); ?>" enctype="multipart/form-data">
+    <?php wp_nonce_field('octopus_ai_upload_sitemap', 'octopus_ai_sitemap_nonce'); ?>
+    <input type="hidden" name="action" value="octopus_ai_upload_sitemap">
+    <input type="file" name="octopus_ai_sitemap_file" accept=".xml">
+    <?php submit_button('Upload sitemap.xml'); ?>
+</form>
+
+<p><strong>...of geef een externe sitemap URL op:</strong></p>
+<form method="post">
+    <input type="url" name="sitemap_url" value="<?php echo esc_attr(get_option('octopus_ai_sitemap_url', '')); ?>" style="width:400px;" placeholder="https://example.com/sitemap.xml" />
+    <?php submit_button('💾 Sitemap opslaan'); ?>
+</form>
+
+<?php
+// ✅ Save externe URL
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['sitemap_url'])) {
+    update_option('octopus_ai_sitemap_url', esc_url_raw($_POST['sitemap_url']));
+    echo '<div class="notice notice-success is-dismissible"><p>Sitemap-URL opgeslagen.</p></div>';
+}
+
+$sitemap_path = $upload_path . 'sitemap.xml';
+if (file_exists($sitemap_path)) {
+    echo '<p><strong>📄 Huidige sitemap:</strong> <a href="' . esc_url($upload_url . 'sitemap.xml') . '" target="_blank">Bekijk sitemap.xml</a></p>';
+}
+
+$sitemap_urls = get_option('octopus_ai_sitemap_urls', []);
+
+require_once plugin_dir_path(__FILE__) . '../includes/sitemap-parser.php';
+$parser = new \OctopusAI\Includes\SitemapParser();
+
+if (isset($_GET['sitemap_debug'])) {
+    $urls = $parser->getUrlsFromSitemap();
+    echo '<p><strong>' . count($urls) . ' URL(s)</strong> gevonden in de sitemap.</p>';
+    echo '<ul>';
+    foreach (array_slice($urls, 0, 10) as $url) {
+        echo '<li><a href="' . esc_url($url) . '" target="_blank">' . esc_html($url) . '</a></li>';
+    }
+    echo '</ul>';
+}
+
+if (isset($_GET['crawl']) && $_GET['crawl'] === 'now') {
+    $count = $parser->fetchAndSaveHtmlFromUrls(25);
+    echo "<div class='updated'><p><strong>$count pagina's</strong> gecrawld en opgeslagen in chunks-folder.</p></div>";
+}
+
+echo '<p><a href="' . esc_url(add_query_arg('sitemap_debug', '1')) . '" class="button">🔍 Toon sitemap-URL’s</a> ';
+echo '<a href="' . esc_url(add_query_arg('crawl', 'now')) . '" class="button button-primary">🌐 Crawlen & opslaan</a></p>';
+?>
+
+<h2>🧹 Sitemap Chunks beheren</h2>
+
+<?php
+$chunk_dir = trailingslashit($upload_dir['basedir']) . 'octopus-ai-chunks/';
+$chunk_url = trailingslashit($upload_dir['baseurl']) . 'octopus-ai-chunks/';
+
+if (isset($_GET['chunks_deleted'])) {
+    echo '<div class="notice notice-success is-dismissible"><p>' . intval($_GET['chunks_deleted']) . ' chunk(s) verwijderd.</p></div>';
+}
+if (isset($_GET['chunks_cleared'])) {
+    echo '<div class="notice notice-success is-dismissible"><p>Alle sitemap chunks verwijderd.</p></div>';
+}
+
+if (file_exists($chunk_dir)) {
+    $chunk_files = glob($chunk_dir . 'sitemap_*.txt');
+    if ($chunk_files): ?>
+        <form method="post" action="<?php echo admin_url('admin-post.php'); ?>">
+            <?php wp_nonce_field('octopus_ai_delete_chunks'); ?>
+            <input type="hidden" name="action" value="octopus_ai_delete_chunks">
+            <ul style="max-height:250px;overflow:auto;border:1px solid #ccc;padding:10px;background:#fff;">
+                <?php foreach ($chunk_files as $file): 
+                    $filename = basename($file); ?>
+                    <li>
+                        <label>
+                            <input type="checkbox" name="chunk_files[]" value="<?php echo esc_attr($filename); ?>">
+                            <a href="<?php echo esc_url($chunk_url . $filename); ?>" target="_blank"><?php echo esc_html($filename); ?></a>
+                        </label>
+                    </li>
+                <?php endforeach; ?>
+            </ul>
+            <p style="margin-top:10px;">
+                <input type="submit" class="button button-secondary" value="🗑️ Geselecteerde chunks verwijderen" onclick="return confirm('Weet je zeker dat je deze bestanden wilt verwijderen?');">
+            </p>
+        </form>
+
+        <!-- Alles verwijderen -->
+        <form method="post" action="<?php echo admin_url('admin-post.php'); ?>" style="margin-top:10px;">
+            <?php wp_nonce_field('octopus_ai_clear_all_chunks'); ?>
+            <input type="hidden" name="action" value="octopus_ai_clear_all_chunks">
+            <?php submit_button('🧨 Verwijder ALLE sitemap chunks', 'delete', '', false); ?>
+        </form>
+
+    <?php else: ?>
+        <p><em>Er zijn momenteel geen sitemap chunks opgeslagen.</em></p>
+    <?php endif;
+} else {
+    echo '<p><em>De chunks-folder bestaat nog niet.</em></p>';
+}
+?>
+
+
+
+<hr>
+
         <h2>🗂️ Geüploade Bestanden</h2>
         <?php
         if (isset($_GET['bulk_delete'])) {
@@ -348,6 +455,12 @@ function octopus_ai_settings_page() {
             echo '<p>Er zijn nog geen bestanden geüpload.</p>';
         }
         ?>
+
+        <hr>
+
+
+
+
     </div>
 
     <script>
@@ -356,5 +469,15 @@ function octopus_ai_settings_page() {
             row.style.display = this.value === 'selected' ? '' : 'none';
         });
     </script>
+<?php if (isset($_GET['upload']) || isset($_GET['crawl']) || isset($_GET['sitemap_debug'])): ?>
+<script>
+    document.addEventListener('DOMContentLoaded', function () {
+        const el = document.getElementById('sitemap-zone');
+        if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    });
+</script>
+<?php endif; ?>
 <?php }
+
+
 
