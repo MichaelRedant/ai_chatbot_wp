@@ -508,7 +508,7 @@ function octopus_ai_settings_page() {
     <form method="post" action="<?php echo admin_url('admin-post.php'); ?>" enctype="multipart/form-data" style="margin-bottom: 15px;">
         <?php wp_nonce_field('octopus_ai_upload_sitemap', 'octopus_ai_sitemap_nonce'); ?>
         <input type="hidden" name="action" value="octopus_ai_upload_sitemap">
-        <input type="file" name="octopus_ai_sitemap_file" accept=".xml">
+       <input type="file" name="octopus_ai_sitemap_file[]" accept=".xml" multiple required>
         <?php submit_button('Upload sitemap.xml', 'secondary'); ?>
     </form>
 
@@ -547,7 +547,7 @@ if (isset($_GET['sitemap_debug'])) {
 }
 
 if (isset($_GET['crawl']) && $_GET['crawl'] === 'now') {
-    $count = $parser->fetchAndSaveHtmlFromUrls(25);
+    $count = $parser->fetchAndSaveHtmlFromUrls(0);
     echo "<div class='updated'><p><strong>$count pagina's</strong> gecrawld en opgeslagen in chunks-folder.</p></div>";
 }
 

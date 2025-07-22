@@ -114,12 +114,13 @@ chatReset.addEventListener('click', () => {
     const message = document.createElement('div');
     message.classList.add(sender === 'user' ? 'user-message' : 'bot-message');
 
-    const html = content
+    const html = decodeURIComponent(escape(content))
     .replace(/\\n/g, '<br>')
     .replace(/\\(.)/g, '$1')
-    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')  // **tekst** → <strong>
-    .replace(/\*([^*]+)\*/g, '<em>$1</em>')            // *tekst* → <em>
+    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+    .replace(/\*([^*]+)\*/g, '<em>$1</em>')
     .replace(/\[([^\]]+)]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
+
 
 
     message.innerHTML = html;

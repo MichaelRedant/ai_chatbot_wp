@@ -20,19 +20,25 @@ function octopus_ai_handle_sitemap_upload() {
 
     $all_urls = [];
 
-    // 📥 Methode 1: Bestand geüpload
-    if (!empty($_FILES['octopus_ai_sitemap_file']['tmp_name'])) {
-        $file = $_FILES['octopus_ai_sitemap_file'];
-        if ($file['error'] === UPLOAD_ERR_OK) {
-            $original = sanitize_file_name($file['name']);
-            $destination = $upload_path . $original;
-            move_uploaded_file($file['tmp_name'], $destination);
-            $urls = octopus_ai_parse_sitemap($destination);
-            $all_urls = array_merge($all_urls, $urls);
+    // 📥 Meerdere sitemap-bestanden
+    if (!empty($_FILES['octopus_ai_sitemap_file']['name'][0])) {
+        $files = $_FILES['octopus_ai_sitemap_file'];
+
+        foreach ($files['name'] as $i => $name) {
+            if ($files['error'][$i] === UPLOAD_ERR_OK) {
+                $filename = sanitize_file_name($name);
+                $tmp_path = $files['tmp_name'][$i];
+                $dest_path = $upload_path . $filename;
+
+                if (move_uploaded_file($tmp_path, $dest_path)) {
+                    $urls = octopus_ai_parse_sitemap($dest_path);
+                    $all_urls = array_merge($all_urls, $urls);
+                }
+            }
         }
     }
 
-    // 🌐 Methode 2: URL ingevoerd
+    // 🌐 Optioneel: URL invoer
     if (!empty($_POST['octopus_ai_sitemap_url'])) {
         $remote_url = esc_url_raw(trim($_POST['octopus_ai_sitemap_url']));
         $response = wp_remote_get($remote_url);
@@ -56,6 +62,7 @@ function octopus_ai_handle_sitemap_upload() {
     wp_redirect(admin_url('admin.php?page=octopus-ai-chatbot&upload=sitemap&found=' . count($all_urls)));
     exit;
 }
+
 
 /**
  * ✅ Parse sitemap-bestand en haal alle <loc> elementen op

@@ -51,17 +51,13 @@ function octopus_ai_chatbot_callback($request)
     $message = sanitize_text_field($request->get_param('message'));
     $history = $request->get_param('history') ?? [];
 
-    // ➕ Intentherkenning
     $intent = octopus_ai_detect_intent($message);
     if ($intent) {
         error_log('[Octopus AI] Gedetecteerde intent: ' . $intent);
     }
 
-    // 🔐 Instellingen ophalen
     $api_key = get_option('octopus_ai_api_key');
-    $tone = get_option('octopus_ai_tone');
-if (!$tone) {
-    $tone = <<<EOT
+    $tone = get_option('octopus_ai_tone') ?: <<<EOT
 Je bent een AI-chatbot die klanten professioneel, duidelijk en kort helpt bij het gebruik van deze software.
 
 🎯 Doel:
@@ -90,128 +86,128 @@ Je bent een AI-chatbot die klanten professioneel, duidelijk en kort helpt bij he
 Context:
 EOT;
 
-}
-
     $fallback = get_option('octopus_ai_fallback', 'Sorry, daar kan ik je niet mee helpen.');
-    $model   = get_option('octopus_ai_model', 'gpt-4.1-mini');
-
-    // 📥 Context + metadata ophalen
+    $model = get_option('octopus_ai_model', 'gpt-4.1-mini');
     $context = '';
-    $metadata = [];
+    $metas = [];
 
     if (function_exists('octopus_ai_retrieve_relevant_chunks')) {
         $result = octopus_ai_retrieve_relevant_chunks($message);
-
-        if (!empty($result['context'])) {
-            $context = $result['context'];
-            $metadata = $result['metadata']; // voor backward compatibility
-            $metas    = $result['metas'] ?? [];
-        }
+        $context = $result['context'] ?? '';
+        $metas   = $result['metas'] ?? [];
     }
 
-    // 🧠 System prompt opbouwen
-$system_prompt = $tone . "\n\nContext:\n" . $context;
+    // ➕ Prompt opbouwen
+    $system_prompt = $tone . "\n\nContext:\n" . $context;
+    $system_prompt .= "\n\nOpmerking:\nAls de gebruiker bevestigt dat hij verder geholpen wil worden (bijv. zegt 'ja'), geef dan een inhoudelijk vervolg op het onderwerp, niet een algemene begroeting of herstart.";
 
-// ➕ Conversatielogica instructie toevoegen
-$system_prompt .= "\n\nOpmerking:\nAls de gebruiker bevestigt dat hij verder geholpen wil worden (bijv. zegt 'ja'), geef dan een inhoudelijk vervolg op het onderwerp, niet een algemene begroeting of herstart.";
+    // 📄 Links toevoegen
+    $validLinkFound = false;
+    if (!empty($metas)) {
+        $system_prompt .= "\n\nDeze informatie komt uit de volgende onderdelen:\n";
+        foreach ($metas as $meta) {
+            $title = sanitize_text_field($meta['section_title'] ?? '');
+            $slug  = sanitize_text_field($meta['page_slug'] ?? '');
+            $url   = esc_url_raw($meta['source_url'] ?? '');
 
-
-// 📄 Extra info op basis van meerdere relevante chunks
-if (!empty($metas)) {
-    $system_prompt .= "\n\n📄 Deze informatie komt uit de volgende onderdelen:\n";
-
-    foreach ($metas as $meta) {
-        $title = sanitize_text_field($meta['section_title'] ?? '');
-        $slug  = sanitize_text_field($meta['page_slug'] ?? '');
-        $url   = esc_url_raw($meta['source_url'] ?? '');
-
-        if ($title && $slug) {
-            $doc_url = "https://login.octopus.be/manual/NL/{$slug}";
-            if (octopus_ai_is_valid_url($doc_url)) {
-                $system_prompt .= "- *{$title}*\n  [Bekijk dit in de handleiding]({$doc_url})\n";
-            } else {
-                error_log("[Octopus AI] ❌ Handleiding-link bestaat niet: {$doc_url}");
-                $system_prompt .= "- *{$title}*\n  _(Er bestaat momenteel geen rechtstreekse handleidingspagina voor dit onderdeel)_\n";
+            if ($title && $slug) {
+                $doc_url = "https://login.octopus.be/manual/NL/{$slug}";
+                if (octopus_ai_is_valid_url($doc_url)) {
+                    $system_prompt .= "- *{$title}*\n  [Bekijk dit in de handleiding]({$doc_url})\n";
+                    $validLinkFound = true;
+                }
+            } elseif ($title && $url) {
+                $system_prompt .= "- *{$title}*\n  [Bekijk dit op de website]({$url})\n";
+                $validLinkFound = true;
             }
-        } elseif ($title && $url) {
-            $system_prompt .= "- *{$title}*\n  [Bekijk dit op de website]({$url})\n";
         }
     }
-}
 
-$messages = [
-    ['role' => 'system', 'content' => $system_prompt]
-];
-
-foreach ($history as $entry) {
-    if (isset($entry['role'], $entry['content']) && in_array($entry['role'], ['user', 'assistant'])) {
-        $messages[] = [
-            'role'    => sanitize_text_field($entry['role']),
-            'content' => sanitize_textarea_field($entry['content']),
-        ];
+    // ➕ Opbouw history
+    $messages = [['role' => 'system', 'content' => $system_prompt]];
+    foreach ($history as $entry) {
+        if (isset($entry['role'], $entry['content']) && in_array($entry['role'], ['user', 'assistant'])) {
+            $messages[] = [
+                'role'    => sanitize_text_field($entry['role']),
+                'content' => sanitize_textarea_field($entry['content']),
+            ];
+        }
     }
-}
 
-    // ✅ API request voorbereiden
-    $data = array(
-        'model' => $model,
-        'messages' => $messages
-    );
-
-    $response = wp_remote_post('https://api.openai.com/v1/chat/completions', array(
-        'headers' => array(
+    // ✅ API request
+    $response = wp_remote_post('https://api.openai.com/v1/chat/completions', [
+        'headers' => [
             'Content-Type'  => 'application/json',
             'Authorization' => 'Bearer ' . $api_key,
-        ),
-        'body'    => wp_json_encode($data),
+        ],
+        'body' => wp_json_encode([
+            'model'    => $model,
+            'messages' => $messages
+        ]),
         'timeout' => 30,
-    ));
+    ]);
 
     if (is_wp_error($response)) {
-        error_log('[Octopus AI] WP Error: ' . $response->get_error_message());
         return new WP_Error('api_error', 'Technische fout bij het ophalen van het antwoord.');
     }
 
     $body_json = wp_remote_retrieve_body($response);
     $body = json_decode($body_json, true);
+    // 🧠 AI-antwoord verwerken
+$answer = $body['choices'][0]['message']['content'] ?? '';
 
-    if (!isset($body['choices'][0]['message']['content'])) {
-        $error_message = $body['error']['message'] ?? 'Ongeldige API-respons.';
-        error_log('[Octopus AI] OpenAI fout: ' . $error_message);
-        error_log('[Octopus AI] Body: ' . $body_json);
-        return new WP_Error('api_error', 'Fout van OpenAI: ' . $error_message);
-    }
-
-    $answer = $body['choices'][0]['message']['content'];
-    $status = 'success';
-
-    // 🧾 Logging
-    if (function_exists('octopus_ai_log_interaction')) {
-        $context_length = strlen($context);
-        $error_message  = $status === 'fail' ? json_encode($body) : '';
-        octopus_ai_log_interaction($message, $answer, $context_length, $status, $error_message);
-    }
-
-    if (!empty($answer)) {
-    $answer = mb_convert_encoding($answer, 'UTF-8', 'UTF-8');
-
-    // Fallbackcontrole: komt exact overeen?
-    if (trim($answer) === trim($fallback)) {
-        // Zoekterm extraheren
-        if (!function_exists('octopus_ai_extract_keyword')) {
-            require_once plugin_dir_path(__FILE__) . 'helpers/extract-keyword.php';
-        }
-        $keyword = octopus_ai_extract_keyword($message);
-
-        if ($keyword) {
-            $zoeklink = 'https://login.octopus.be/manual/NL/hmftsearch.htm?zoom_query=' . rawurlencode($keyword);
-            $answer .= "\n\n🔎 [Bekijk mogelijke info in de handleiding]($zoeklink)";
-        }
-    }
-
-    return do_shortcode(wp_specialchars_decode(stripslashes($answer), ENT_QUOTES));
-
+if (!$answer) {
+    $error_message = $body['error']['message'] ?? 'Ongeldige API-respons.';
+    return new WP_Error('api_error', 'Fout van OpenAI: ' . $error_message);
 }
 
-return $fallback;
+// ✅ Decode: \uXXXX → écht Unicode-teken (zoals “ ” é …)
+$answer = preg_replace_callback('/\\\\u([0-9a-fA-F]{4})/', function ($m) {
+    return mb_convert_encoding(pack('H*', $m[1]), 'UTF-8', 'UCS-2BE');
+}, $answer);
+
+// ✅ Algemene correcties en veiligheid
+$answer = mb_convert_encoding($answer, 'UTF-8', 'UTF-8');
+$answer = wp_specialchars_decode(stripslashes($answer), ENT_QUOTES);
+
+// ✅ Emoji verwijderen (blacklist)
+$emoji_blacklist = [
+    '📄','🔎','🧾','📌','🔐','🗂️','🧠','⚙️','🚀','💬','🎯','🗣️','🔽','🔼','📊',
+    '🧪','💡','📁','🔗','✅','❌','⚠️','ℹ️','🧨','🔍','📦','📬','📥','📤','📍',
+    '🗃️','📈','📉','📅','📆','📋','✉️','💻','📱','🖥️','📎','📝','🖊️','🔒','🔓',
+    '🛠️','🪄','🧹','🪪','🗑️','⏳','⌛','🔧','👎','👍'
+];
+$answer = str_replace($emoji_blacklist, '', $answer);
+
+// ✅ Dode links naar de handleiding weghalen (optioneel: kan zwaar zijn als er veel zijn)
+$answer = preg_replace_callback(
+    '/\(https:\/\/login\.octopus\.be\/manual\/(NL|FR)\/([^)]+)\)/',
+    function ($matches) {
+        $lang = $matches[1];
+        $slug = $matches[2];
+        $url  = "https://login.octopus.be/manual/{$lang}/{$slug}";
+        return octopus_ai_is_valid_url($url) ? "($url)" : ''; // enkel tonen indien valide
+    },
+    $answer
+);
+
+// ✅ Fallback-zoeklink als geen geldige link gevonden is
+if (
+    !$validLinkFound &&
+    (
+        trim($answer) === trim($fallback) ||
+        !preg_match('/https:\/\/login\.octopus\.be\/manual\/(NL|FR)\//', $answer)
+    )
+) {
+    if (!function_exists('octopus_ai_extract_keyword')) {
+        require_once plugin_dir_path(__FILE__) . 'helpers/extract-keyword.php';
+    }
+    $keyword = octopus_ai_extract_keyword($message);
+    if ($keyword) {
+        $zoeklink = 'https://login.octopus.be/manual/NL/hmftsearch.htm?zoom_query=' . rawurlencode($keyword);
+        $answer .= "\n\n[Bekijk mogelijke info in de handleiding]($zoeklink)";
+    }
+}
+
+return do_shortcode($answer);
 }
