@@ -339,6 +339,7 @@ function octopus_ai_settings_page() {
                             <?php
                             $models = [
                                 'gpt-4.1-mini'   => 'GPT-4.1 Mini ⚖️ (aanbevolen)',
+                                'gpt-4o'         => 'GPT-4o 🧠⚡ (snel en krachtig)',
                                 'gpt-4.1-nano'   => 'GPT-4.1 Nano 🚀 (supersnel)',
                                 'gpt-4.1'        => 'GPT-4.1 🧠 (maximale accuraatheid)',
                                 'o4-mini'        => 'OpenAI o4-mini 🔬 (voor redenering)',
@@ -361,6 +362,13 @@ function octopus_ai_settings_page() {
                                 </thead>
                                 <tbody>
                                     <tr><td>GPT-4.1 Mini</td><td>⚡⚡⚡</td><td>🧠🧠🧠</td><td>$0.40 / $1.60</td><td>⚖️ Balans snelheid/kwaliteit</td></tr>
+                                    <tr>
+    <td>GPT-4o</td>
+    <td>⚡⚡⚡⚡</td>
+    <td>🧠🧠🧠🧠</td>
+    <td>$0.50 / $1.50</td>
+    <td>🧠⚡ Nieuw, snel & accuraat</td>
+</tr>
                                     <tr><td>GPT-4.1 Nano</td><td>⚡⚡⚡⚡</td><td>🧠🧠</td><td>$0.10 / $0.40</td><td>🚀 Snelle basistaken</td></tr>
                                     <tr><td>GPT-4.1</td><td>⚡</td><td>🧠🧠🧠🧠</td><td>$2.00 / $8.00</td><td>💡 Complexe vragen</td></tr>
                                     <tr><td>OpenAI o4-mini</td><td>⚡⚡</td><td>🧠🧠🧠🧠</td><td>$1.10 / $4.40</td><td>🔬 Redenering & logica</td></tr>
