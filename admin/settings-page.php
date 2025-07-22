@@ -43,6 +43,7 @@ function octopus_ai_register_settings() {
     return sanitize_text_field($value);
 });
     register_setting('octopus_ai_settings_group', 'octopus_ai_tone', 'sanitize_textarea_field');
+    register_setting('octopus_ai_settings_group', 'octopus_ai_header_text_color', 'sanitize_hex_color');
     register_setting('octopus_ai_settings_group', 'octopus_ai_test_mode', 'intval');
     register_setting('octopus_ai_settings_group', 'octopus_ai_fallback', 'sanitize_text_field');
     register_setting('octopus_ai_settings_group', 'octopus_ai_primary_color', 'sanitize_hex_color');
@@ -179,8 +180,135 @@ function octopus_ai_settings_page() {
     $masked_key = $api_key ? substr($api_key, 0, 5) . str_repeat('*', strlen($api_key) - 10) . substr($api_key, -5) : '';
     $selected_model = get_option('octopus_ai_model', 'gpt-4.1-mini');
     ?>
-    <div class="wrap">
-        <h1>Octopus AI Chatbot Instellingen</h1>
+    <style>
+    .octopus-settings .form-table th {
+        width: 200px;
+        font-weight: 600;
+        color: #222;
+    }
+
+    .octopus-settings .form-table td {
+        padding-bottom: 10px;
+    }
+
+    .octopus-settings h2 {
+        border-left: 4px solid var(--primary-color, #0f6c95);
+        padding-left: 10px;
+        margin-top: 40px;
+        font-size: 20px;
+        color: #0f6c95;
+    }
+
+    .collapsible-heading {
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    background: #f3f4f6;
+    padding: 10px;
+    border-left: 4px solid var(--primary-color, #0f6c95);
+    font-size: 16px;
+    margin-top: 40px;
+    border-radius: 4px;
+}
+
+.collapsible-heading .toggle-arrow {
+    font-size: 14px;
+    margin-left: 10px;
+    transition: transform 0.3s ease;
+}
+
+.collapsible-heading.collapsed .toggle-arrow {
+    transform: rotate(-90deg);
+}
+
+.collapsible-content {
+    display: block;
+    margin-top: 10px;
+    transition: all 0.3s ease;
+}
+.collapsible-content.hidden {
+    display: none;
+}
+
+    .octopus-settings input[type="text"],
+    .octopus-settings input[type="url"],
+    .octopus-settings textarea,
+    .octopus-settings select {
+        width: 100%;
+        max-width: 500px;
+        padding: 6px 10px;
+        border-radius: 4px;
+        border: 1px solid #ccc;
+    }
+
+    .octopus-settings .button-primary {
+        background-color: #0f6c95;
+        border-color: #0f6c95;
+        box-shadow: none;
+    }
+
+    .octopus-settings ul {
+        list-style: none;
+        padding-left: 0;
+    }
+
+    .octopus-settings ul li {
+        margin-bottom: 6px;
+    }
+
+    .octopus-settings .notice {
+        margin-top: 20px;
+    }
+
+    .octopus-settings hr {
+        margin-top: 40px;
+        margin-bottom: 40px;
+        border-color: #ddd;
+    }
+
+    .octopus-settings .widefat th,
+    .octopus-settings .widefat td {
+        font-size: 13px;
+    }
+
+    .octopus-settings .section-description {
+        font-style: italic;
+        color: #666;
+        margin-top: -8px;
+        margin-bottom: 15px;
+    }
+
+    .octopus-settings .upload-box {
+    background: #fefefe;
+    border: 1px solid #ddd;
+    border-left: 5px solid var(--primary-color, #0f6c95);
+    padding: 20px;
+    margin-top: 20px;
+    border-radius: 8px;
+    box-shadow: 0 1px 2px rgba(0,0,0,0.05);
+}
+
+.octopus-settings .upload-box h3 {
+    margin-top: 0;
+    margin-bottom: 10px;
+    font-size: 17px;
+    color: #0f6c95;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.octopus-settings .upload-box input[type="file"],
+.octopus-settings .upload-box input[type="url"] {
+    margin-top: 5px;
+    margin-bottom: 10px;
+}
+
+</style>
+
+    <div class="wrap octopus-settings">
+        <h1>AI Chatbot Instellingen</h1>
 
         <?php if (isset($_GET['upload']) && $_GET['upload'] === 'success'): ?>
             <div class="notice notice-success is-dismissible"><p>PDF's succesvol geüpload en verwerkt.</p></div>
@@ -261,6 +389,11 @@ function octopus_ai_settings_page() {
             <h2>🎨 Uiterlijk</h2>
             <table class="form-table">
                 <tr><th>Primaire kleur</th><td><input type="text" name="octopus_ai_primary_color" class="wp-color-picker-field" data-default-color="#0f6c95" value="<?php echo esc_attr(get_option('octopus_ai_primary_color', '#0f6c95')); ?>" /></td></tr>
+                <tr>
+    <th>Header tekstkleur</th>
+    <td><input type="text" name="octopus_ai_header_text_color" class="wp-color-picker-field" data-default-color="#ffffff" value="<?php echo esc_attr(get_option('octopus_ai_header_text_color', '#ffffff')); ?>" /></td>
+</tr>
+
                 <tr><th>Logo-URL</th>
                     <td>
                         <?php $logo = get_option('octopus_ai_logo_url'); ?>
@@ -271,7 +404,10 @@ function octopus_ai_settings_page() {
                 </tr>
             </table>
 
-            <h2>🌐 Zichtbaarheid</h2>
+            <h2>
+    🌐 Zichtbaarheid
+</h2>
+<div>
             <table class="form-table">
                 <tr><th>Chatbot weergave</th>
                     <td>
@@ -307,32 +443,73 @@ function octopus_ai_settings_page() {
 
             <?php submit_button('Instellingen opslaan'); ?>
         </form>
+    </div>
+        <hr>
+
+        <h2 class="collapsible-heading" onclick="toggleSection(this)">
+    🗂️ Geüploade Bestanden <span class="toggle-arrow">▼</span>
+</h2>
+        <div class="collapsible-content hidden">
+
+        <div class="upload-box">
+    <h3>📄 PDF-handleidingen uploaden</h3>
+    <form method="post" action="<?php echo admin_url('admin-post.php'); ?>" enctype="multipart/form-data">
+        <?php wp_nonce_field('octopus_ai_upload_pdf', 'octopus_ai_pdf_nonce'); ?>
+        <input type="hidden" name="action" value="octopus_ai_pdf_upload">
+        <input type="file" name="octopus_ai_pdf_upload[]" accept="application/pdf" multiple required>
+        <?php submit_button('Upload PDF'); ?>
+    </form>
+</div>
+
+
+        <?php
+        if (isset($_GET['bulk_delete'])) {
+            echo '<div class="notice notice-success is-dismissible"><p>' . intval($_GET['bulk_delete']) . ' bestand(en) succesvol verwijderd.</p></div>';
+        }
+        if (file_exists($upload_path)) {
+            $files = glob($upload_path . '*');
+            if ($files) {
+                echo '<form method="post" action="' . esc_url(admin_url('admin-post.php')) . '">';
+                wp_nonce_field('octopus_ai_bulk_delete', 'octopus_ai_bulk_delete_nonce');
+                echo '<input type="hidden" name="action" value="octopus_ai_bulk_delete">';
+                echo '<ul>';
+                foreach ($files as $file) {
+                    $filename = basename($file);
+                    $delete_url = wp_nonce_url(admin_url('admin-post.php?action=octopus_ai_delete_file&file=' . urlencode($filename)), 'octopus_ai_delete_file');
+                    echo '<li>';
+                    echo '<label><input type="checkbox" name="octopus_ai_files[]" value="' . esc_attr($filename) . '"> ';
+                    echo '<a href="' . esc_url($upload_url . $filename) . '" target="_blank">' . esc_html($filename) . '</a></label> ';
+                    echo '<a href="' . esc_url($delete_url) . '" style="color:red;margin-left:10px;" onclick="return confirm(\'Weet je zeker dat je dit bestand wilt verwijderen?\');">Verwijderen</a>';
+                    echo '</li>';
+                }
+                echo '</ul>';
+                echo '<p><input type="submit" class="button button-secondary" value="Geselecteerde bestanden verwijderen" onclick="return confirm(\'Weet je zeker dat je deze bestanden wilt verwijderen?\');"></p>';
+                echo '</form>';
+            } else {
+                echo '<p>Er zijn nog geen bestanden geüpload.</p>';
+            }
+        } else {
+            echo '<p>Er zijn nog geen bestanden geüpload.</p>';
+        }
+        ?>
 
         <hr>
 
-        <h2>📄 Upload PDF-handleiding(en)</h2>
-        <form method="post" action="<?php echo admin_url('admin-post.php'); ?>" enctype="multipart/form-data">
-            <?php wp_nonce_field('octopus_ai_upload_pdf', 'octopus_ai_pdf_nonce'); ?>
-            <input type="hidden" name="action" value="octopus_ai_pdf_upload">
-            <input type="file" name="octopus_ai_pdf_upload[]" accept="application/pdf" multiple required>
-            <?php submit_button('Upload PDF'); ?>
-        </form>
+       <div class="upload-box">
+    <h3>🗺️ Sitemap uploaden of via URL</h3>
+    <form method="post" action="<?php echo admin_url('admin-post.php'); ?>" enctype="multipart/form-data" style="margin-bottom: 15px;">
+        <?php wp_nonce_field('octopus_ai_upload_sitemap', 'octopus_ai_sitemap_nonce'); ?>
+        <input type="hidden" name="action" value="octopus_ai_upload_sitemap">
+        <input type="file" name="octopus_ai_sitemap_file" accept=".xml">
+        <?php submit_button('Upload sitemap.xml', 'secondary'); ?>
+    </form>
 
-        <hr>
+    <form method="post">
+        <input type="url" name="sitemap_url" value="<?php echo esc_attr(get_option('octopus_ai_sitemap_url', '')); ?>" style="width:400px;" placeholder="https://example.com/sitemap.xml" />
+        <?php submit_button('💾 Sitemap opslaan'); ?>
+    </form>
+</div>
 
-        <h2 id="sitemap-zone">🗺️ Upload sitemap.xml</h2>
-<form method="post" action="<?php echo admin_url('admin-post.php'); ?>" enctype="multipart/form-data">
-    <?php wp_nonce_field('octopus_ai_upload_sitemap', 'octopus_ai_sitemap_nonce'); ?>
-    <input type="hidden" name="action" value="octopus_ai_upload_sitemap">
-    <input type="file" name="octopus_ai_sitemap_file" accept=".xml">
-    <?php submit_button('Upload sitemap.xml'); ?>
-</form>
-
-<p><strong>...of geef een externe sitemap URL op:</strong></p>
-<form method="post">
-    <input type="url" name="sitemap_url" value="<?php echo esc_attr(get_option('octopus_ai_sitemap_url', '')); ?>" style="width:400px;" placeholder="https://example.com/sitemap.xml" />
-    <?php submit_button('💾 Sitemap opslaan'); ?>
-</form>
 
 <?php
 // ✅ Save externe URL
@@ -370,7 +547,47 @@ echo '<p><a href="' . esc_url(add_query_arg('sitemap_debug', '1')) . '" class="b
 echo '<a href="' . esc_url(add_query_arg('crawl', 'now')) . '" class="button button-primary">🌐 Crawlen & opslaan</a></p>';
 ?>
 
-<h2>🧹 Sitemap Chunks beheren</h2>
+<hr>
+
+<h2>🧾 Geüploade sitemap-bestanden</h2>
+
+<?php
+$upload_dir = wp_upload_dir();
+$sitemap_dir = trailingslashit($upload_dir['basedir']) . 'octopus-chatbot/';
+$sitemap_url = trailingslashit($upload_dir['baseurl']) . 'octopus-chatbot/';
+
+$sitemaps = glob($sitemap_dir . '*.xml');
+
+if (isset($_GET['sitemaps_deleted'])) {
+    echo '<div class="notice notice-success is-dismissible"><p>' . intval($_GET['sitemaps_deleted']) . ' sitemap-bestand(en) verwijderd.</p></div>';
+}
+
+if ($sitemaps):
+?>
+    <form method="post" action="<?php echo admin_url('admin-post.php'); ?>">
+        <?php wp_nonce_field('octopus_ai_delete_sitemaps'); ?>
+        <input type="hidden" name="action" value="octopus_ai_delete_sitemaps">
+        <ul style="max-height:250px;overflow:auto;border:1px solid #ccc;padding:10px;background:#fff;">
+            <?php foreach ($sitemaps as $file): 
+                $filename = basename($file); ?>
+                <li>
+                    <label>
+                        <input type="checkbox" name="sitemap_files[]" value="<?php echo esc_attr($filename); ?>">
+                        <a href="<?php echo esc_url($sitemap_url . $filename); ?>" target="_blank"><?php echo esc_html($filename); ?></a>
+                    </label>
+                </li>
+            <?php endforeach; ?>
+        </ul>
+        <p style="margin-top:10px;">
+            <input type="submit" class="button button-secondary" value="🗑️ Verwijder geselecteerde sitemaps" onclick="return confirm('Weet je zeker dat je deze sitemap-bestanden wilt verwijderen?');">
+        </p>
+    </form>
+<?php else: ?>
+    <p><em>Er zijn momenteel geen sitemap-bestanden geüpload.</em></p>
+<?php endif; ?>
+
+
+<h2>🧹 Sitemap chunks beheren</h2>
 
 <?php
 $chunk_dir = trailingslashit($upload_dir['basedir']) . 'octopus-ai-chunks/';
@@ -420,45 +637,36 @@ if (file_exists($chunk_dir)) {
 }
 ?>
 
+        </div>
 
 
 <hr>
 
-        <h2>🗂️ Geüploade Bestanden</h2>
-        <?php
-        if (isset($_GET['bulk_delete'])) {
-            echo '<div class="notice notice-success is-dismissible"><p>' . intval($_GET['bulk_delete']) . ' bestand(en) succesvol verwijderd.</p></div>';
+<script>
+document.addEventListener('DOMContentLoaded', function () {
+    const url = new URL(window.location);
+    const paramsToRemove = ['upload', 'delete', 'bulk_delete', 'chunks_deleted', 'chunks_cleared', 'sitemap_debug', 'crawl'];
+
+    let shouldUpdate = false;
+    for (const param of paramsToRemove) {
+        if (url.searchParams.has(param)) {
+            url.searchParams.delete(param);
+            shouldUpdate = true;
         }
-        if (file_exists($upload_path)) {
-            $files = glob($upload_path . '*');
-            if ($files) {
-                echo '<form method="post" action="' . esc_url(admin_url('admin-post.php')) . '">';
-                wp_nonce_field('octopus_ai_bulk_delete', 'octopus_ai_bulk_delete_nonce');
-                echo '<input type="hidden" name="action" value="octopus_ai_bulk_delete">';
-                echo '<ul>';
-                foreach ($files as $file) {
-                    $filename = basename($file);
-                    $delete_url = wp_nonce_url(admin_url('admin-post.php?action=octopus_ai_delete_file&file=' . urlencode($filename)), 'octopus_ai_delete_file');
-                    echo '<li>';
-                    echo '<label><input type="checkbox" name="octopus_ai_files[]" value="' . esc_attr($filename) . '"> ';
-                    echo '<a href="' . esc_url($upload_url . $filename) . '" target="_blank">' . esc_html($filename) . '</a></label> ';
-                    echo '<a href="' . esc_url($delete_url) . '" style="color:red;margin-left:10px;" onclick="return confirm(\'Weet je zeker dat je dit bestand wilt verwijderen?\');">Verwijderen</a>';
-                    echo '</li>';
-                }
-                echo '</ul>';
-                echo '<p><input type="submit" class="button button-secondary" value="Geselecteerde bestanden verwijderen" onclick="return confirm(\'Weet je zeker dat je deze bestanden wilt verwijderen?\');"></p>';
-                echo '</form>';
-            } else {
-                echo '<p>Er zijn nog geen bestanden geüpload.</p>';
-            }
-        } else {
-            echo '<p>Er zijn nog geen bestanden geüpload.</p>';
-        }
-        ?>
+    }
 
-        <hr>
-
-
+    if (shouldUpdate) {
+        window.history.replaceState({}, document.title, url.pathname + url.search);
+    }
+});
+</script>
+<script>
+function toggleSection(header) {
+    const content = header.nextElementSibling;
+    content.classList.toggle('hidden');
+    header.classList.toggle('collapsed');
+}
+</script>
 
 
     </div>

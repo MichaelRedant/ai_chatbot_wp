@@ -1,8 +1,8 @@
 <?php
 /*
-Plugin Name: Octopus AI Chatbot
-Description: Een AI Chatbot voor Octopus, volledig geïntegreerd in WordPress.
-Version: 0.2
+Plugin Name: AI Chatbot
+Description: Een AI Chatbot, volledig geïntegreerd in WordPress.
+Version: 0.3
 Author: Michaël Redant
 */
 
@@ -52,12 +52,15 @@ function octopus_ai_enqueue_frontend_assets() {
     wp_enqueue_script('octopus-ai-chatbot-script', plugin_dir_url(__FILE__) . 'assets/js/chatbot.js', array('jquery'), '1.0', true);
 
     // Chatbot settings beschikbaar maken in JS
-    wp_localize_script('octopus-ai-chatbot-script', 'octopus_ai_chatbot_vars', array(
-        'ajaxurl'          => admin_url('admin-ajax.php'),
-        'logo_url'         => get_option('octopus_ai_logo_url', 'https://www.octopus.be/wp-content/uploads/2025/04/web-app-manifest-512x512-1.webp'),
-        'welcome_message'  => get_option('octopus_ai_welcome_message', '👋 Hallo! Hoe kan ik je vandaag helpen?'),
-        'brand_name'       => get_option('octopus_ai_brand_name', 'AI Chatbot')
-    ));
+   wp_localize_script('octopus-ai-chatbot-script', 'octopus_ai_chatbot_vars', array(
+    'ajaxurl'           => admin_url('admin-ajax.php'),
+    'brand_name'        => get_option('octopus_ai_brand_name', 'AI Chatbot'),
+    'logo_url'          => esc_url(get_option('octopus_ai_logo_url')),
+    'primary_color'     => get_option('octopus_ai_primary_color', '#0f6c95'),
+    'header_text_color' => get_option('octopus_ai_header_text_color', '#ffffff'),
+    'welcome_message'   => get_option('octopus_ai_welcome_message', 'Hallo! Hoe kan ik je helpen?'),
+));
+
 }
 
 add_action('wp_enqueue_scripts', function () {
@@ -68,7 +71,8 @@ add_action('wp_enqueue_scripts', function () {
 
 // ✅ Submenu “Logs” in admin
 add_action('admin_menu', function () {
-    add_submenu_page(
+
+add_submenu_page(
         'octopus-ai-chatbot',
         'Chatbot Logs',
         'Chatbot Logs',
@@ -76,6 +80,7 @@ add_action('admin_menu', function () {
         'octopus-ai-chatbot-logs',
         'octopus_ai_logs_page_callback'
     );
+
 });
 
 // ✅ Database tabel voor logs bij activatie aanmaken

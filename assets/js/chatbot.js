@@ -1,17 +1,4 @@
 document.addEventListener('DOMContentLoaded', function () {
-
-    // ✅ Dynamische instellingen ophalen
-    fetch(octopus_ai_chatbot_vars.ajaxurl + '?action=octopus_ai_get_settings')
-        .then(response => response.json())
-        .then(response => {
-            if (response.success) {
-                const settings = response.data;
-                document.documentElement.style.setProperty('--primary-color', settings.primary_color);
-                document.querySelector('#chat-header').innerText = settings.brand_name;
-            }
-        })
-        .catch(error => console.error('Instellingen laden mislukt', error));
-
     // ✅ Toggle knop
     const toggleButton = document.createElement('div');
     toggleButton.id = 'octopus-chat-toggle';
@@ -21,57 +8,67 @@ document.addEventListener('DOMContentLoaded', function () {
     // ✅ Chatvenster
     const chatbot = document.createElement('div');
     chatbot.id = 'octopus-chatbot';
-    chatbot.innerHTML = `
-    <div id="chat-header">
-        ${octopus_ai_chatbot_vars.brand_name || 'AI Chatbot'}
-        <button id="chat-close" aria-label="Sluiten" style="cursor:pointer;font-size:18px;background:none;border:none;color:white;margin-left:auto;">&times;</button>
-    </div>
-    <div id="chat-messages"></div>
-    <div id="chat-input-container">
-        <input type="text" id="chat-input" placeholder="Typ je vraag..." />
-        <button id="chat-send">Verstuur</button>
-    </div>
-`;
-
-    // ✅ Branding footer
-    const poweredBy = document.createElement('div');
-    poweredBy.id = 'octopus-chat-powered-by';
-    poweredBy.innerHTML = `<small>Powered by <a href="https://www.xinudesign.be" target="_blank" style="color:#999; text-decoration:none;">Xinudesign</a></small>`;
-    chatbot.appendChild(poweredBy);
-
     document.body.appendChild(chatbot);
 
+    const settings = octopus_ai_chatbot_vars;
+
+    // ✅ CSS-variabelen instellen
+    document.documentElement.style.setProperty('--primary-color', settings.primary_color);
+    document.documentElement.style.setProperty('--header-text-color', settings.header_text_color || '#ffffff');
+
+    // ✅ HTML injecteren
+    chatbot.innerHTML = `
+        <div id="chat-header" style="background-color:${settings.primary_color};">
+            <div class="chat-header-inner">
+                <img src="${settings.logo_url}" alt="Logo" class="chat-logo" style="height: 24px; max-width: 28px; margin-right: 10px;">
+                <span class="chat-header-title">${settings.brand_name || 'AI Chatbot'}</span>
+            </div>
+            <button id="chat-close" aria-label="Sluiten" class="chat-close-button">&times;</button>
+        </div>
+        <div id="chat-messages"></div>
+        <div id="chat-input-container">
+            <input type="text" id="chat-input" placeholder="Typ je vraag..." />
+            <button id="chat-send">Verstuur</button>
+        </div>
+    `;
+
+    // ✅ DOM-elementen ophalen
+    const headerTitle  = chatbot.querySelector('.chat-header-title');
+    const closeButton  = chatbot.querySelector('.chat-close-button');
+    const headerBar    = chatbot.querySelector('#chat-header');
     const chatMessages = document.getElementById('chat-messages');
     const chatInput    = document.getElementById('chat-input');
     const chatSend     = document.getElementById('chat-send');
     const chatClose    = document.getElementById('chat-close');
+
+    // ✅ Styling forceren
+    if (headerTitle)  headerTitle.style.setProperty('color', settings.header_text_color || '#ffffff', 'important');
+    if (closeButton)  closeButton.style.setProperty('color', settings.header_text_color || '#ffffff', 'important');
+    if (headerBar)    headerBar.style.setProperty('color', settings.header_text_color || '#ffffff', 'important');
 
     // ✅ Historiek herstellen
     if (sessionStorage.getItem('octopus_chat_history')) {
         chatMessages.innerHTML = sessionStorage.getItem('octopus_chat_history');
     }
 
-    // ✅ Open chatbot
-   toggleButton.addEventListener('click', () => {
-    chatbot.classList.remove('fade-out');
-    chatbot.classList.add('fade-in');
-    chatbot.style.display = 'flex';
-    toggleButton.style.display = 'none';
+    // ✅ Openen
+    toggleButton.addEventListener('click', () => {
+        chatbot.classList.remove('fade-out');
+        chatbot.classList.add('fade-in');
+        chatbot.style.display = 'flex';
+        toggleButton.style.display = 'none';
 
-    // Welkomstbericht tonen
-    if (octopus_ai_chatbot_vars.welcome_message && !sessionStorage.getItem('octopus_chat_welcomed')) {
-        setTimeout(() => {
-            addMessage(octopus_ai_chatbot_vars.welcome_message, 'bot', { isWelcome: true });
-            saveChatHistory();
-            sessionStorage.setItem('octopus_chat_welcomed', 'true');
-        }, 300);
-    }
-});
+        if (settings.welcome_message && !sessionStorage.getItem('octopus_chat_welcomed')) {
+            setTimeout(() => {
+                addMessage(settings.welcome_message, 'bot', { isWelcome: true });
+                saveChatHistory();
+                sessionStorage.setItem('octopus_chat_welcomed', 'true');
+            }, 300);
+        }
+    });
 
-    // ✅ Sluiten via X
+    // ✅ Sluiten
     chatClose.addEventListener('click', closeChatbot);
-
-    // ✅ Buiten klikken sluit chatbot
     document.addEventListener('click', function (e) {
         if (chatbot.style.display === 'flex' && !chatbot.contains(e.target) && !toggleButton.contains(e.target)) {
             closeChatbot();
@@ -87,66 +84,48 @@ document.addEventListener('DOMContentLoaded', function () {
         }, 300);
     }
 
-    // ✅ Bericht verzenden
+    // ✅ Input events
     chatSend.addEventListener('click', sendMessage);
-    chatInput.addEventListener('keypress', function (e) {
-        if (e.key === 'Enter') {
+    chatInput.addEventListener('keydown', function (e) {
+        if (e.key === 'Enter' && !e.shiftKey) {
             e.preventDefault();
             sendMessage();
         }
     });
 
-    chatInput.addEventListener('keydown', function (e) {
-    if (e.key === 'Enter' && !e.shiftKey) {
-        e.preventDefault();
-        sendMessage();
-    }
-});
+    // ✅ Bericht tonen
+    function addMessage(content, sender = 'user', options = {}) {
+        const message = document.createElement('div');
+        message.classList.add(sender === 'user' ? 'user-message' : 'bot-message');
 
-
-    // ✅ Bericht tonen in UI
-     function addMessage(content, sender = 'user', options = {}) {
-    const message = document.createElement('div');
-    message.classList.add(sender === 'user' ? 'user-message' : 'bot-message');
-
-    const html = content
-        .replace(/\\n/g, '<br>')
-        .replace(/\\(.)/g, '$1')
-        .replace(/\[([^\]]+)]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
-
-    message.innerHTML = html;
-
-    // ✅ Alleen duimpjes tonen bij bot-antwoorden die geen welkom zijn
-    if (sender === 'bot' && !options.isWelcome) {
-        const feedback = document.createElement('div');
-        feedback.className = 'feedback-buttons';
-        feedback.innerHTML = `
-            <button class="thumb-up" title="Nuttig">👍</button>
-            <button class="thumb-down" title="Niet nuttig">👎</button>
-        `;
-        message.appendChild(feedback);
-    }
-
-    chatMessages.appendChild(message);
-    chatMessages.scrollTop = chatMessages.scrollHeight;
-    saveChatHistory();
-}
-
-
-    // ✅ Markdown → HTML (klikbare links, linebreaks)
-    function markdownToHtml(text) {
-        return text
-            .replace(/\n/g, '<br>')
+        const html = content
+            .replace(/\\n/g, '<br>')
+            .replace(/\\(.)/g, '$1')
             .replace(/\[([^\]]+)]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
+
+        message.innerHTML = html;
+
+        if (sender === 'bot' && !options.isWelcome) {
+            const feedback = document.createElement('div');
+            feedback.className = 'feedback-buttons';
+            feedback.innerHTML = `
+                <button class="thumb-up" title="Nuttig">👍</button>
+                <button class="thumb-down" title="Niet nuttig">👎</button>
+            `;
+            message.appendChild(feedback);
+        }
+
+        chatMessages.appendChild(message);
+        chatMessages.scrollTop = chatMessages.scrollHeight;
+        saveChatHistory();
     }
 
-    // ✅ Save sessie
+    // ✅ Historiek opslaan
     function saveChatHistory() {
         sessionStorage.setItem('octopus_chat_history', chatMessages.innerHTML);
     }
 
-
-    // ✅ AI verzenden & ontvangen
+    // ✅ Versturen
     async function sendMessage() {
         const message = chatInput.value.trim();
         if (!message) return;
