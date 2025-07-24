@@ -2,7 +2,7 @@
 /*
 Plugin Name: AI Chatbot
 Description: Een AI Chatbot, volledig geïntegreerd in WordPress.
-Version: 0.3
+Version: 0.4
 Author: Michaël Redant
 */
 
@@ -74,33 +74,60 @@ add_action('admin_menu', function () {
 
 add_submenu_page(
         'octopus-ai-chatbot',
-        'Chatbot Logs',
-        'Chatbot Logs',
-        'manage_options',
-        'octopus-ai-chatbot-logs',
-        'octopus_ai_logs_page_callback'
+    'Logging',
+    'Logging',
+    'manage_options',
+    'octopus-ai-logs',
+    'octopus_ai_logs_page'
     );
 
 });
 
-// ✅ Database tabel voor logs bij activatie aanmaken
-function octopus_ai_create_logs_table() {
+function octopus_ai_logs_page() {
     global $wpdb;
-    $table_name = $wpdb->prefix . 'octopus_ai_logs';
+    $table = $wpdb->prefix . 'octopus_ai_logs';
+    $logs = $wpdb->get_results("SELECT * FROM $table ORDER BY datum DESC LIMIT 100");
+
+    echo '<div class="wrap"><h1>Octopus AI Logs (laatste 100)</h1><table class="widefat"><thead><tr>
+        <th>Datum</th><th>Vraag</th><th>Status</th><th>Context</th><th>Fout</th>
+    </tr></thead><tbody>';
+
+    foreach ($logs as $log) {
+        echo '<tr>';
+        echo '<td>' . esc_html($log->datum) . '</td>';
+        echo '<td>' . esc_html(wp_trim_words($log->vraag, 15)) . '</td>';
+        echo '<td>' . esc_html($log->status) . '</td>';
+        echo '<td>' . esc_html($log->context_lengte) . '</td>';
+        echo '<td>' . esc_html(wp_trim_words($log->foutmelding, 10)) . '</td>';
+        echo '</tr>';
+    }
+
+    echo '</tbody></table></div>';
+}
+
+// ✅ Database tabel voor logs bij activatie aanmaken
+
+
+function octopus_ai_create_log_table() {
+    global $wpdb;
+    $table = $wpdb->prefix . 'octopus_ai_logs';
+
     $charset_collate = $wpdb->get_charset_collate();
 
-    $sql = "CREATE TABLE $table_name (
-        id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-        question TEXT,
-        answer LONGTEXT,
-        context_length INT,
-        status VARCHAR(20),
-        error_message TEXT,
-        ip_address VARCHAR(45)
+    $sql = "CREATE TABLE $table (
+        id mediumint(9) NOT NULL AUTO_INCREMENT,
+        vraag text NOT NULL,
+        antwoord text,
+        context_lengte int DEFAULT 0,
+        status varchar(20),
+        foutmelding text,
+        datum datetime DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY  (id)
     ) $charset_collate;";
 
     require_once ABSPATH . 'wp-admin/includes/upgrade.php';
     dbDelta($sql);
 }
-register_activation_hook(__FILE__, 'octopus_ai_create_logs_table');
+register_activation_hook(__FILE__, 'octopus_ai_create_log_table');
+
+

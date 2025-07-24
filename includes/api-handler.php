@@ -8,7 +8,6 @@ if (!function_exists('octopus_ai_detect_intent')) {
 
 }
 
-
 // ✅ REST API endpoint registreren
 add_action('rest_api_init', function () {
     register_rest_route('octopus-ai/v1', '/chatbot', array(
@@ -16,7 +15,14 @@ add_action('rest_api_init', function () {
         'callback' => 'octopus_ai_chatbot_callback',
         'permission_callback' => '__return_true'
     ));
+
+    register_rest_route('octopus-ai/v1', '/feedback', array(
+        'methods'  => 'POST',
+        'callback' => 'octopus_ai_save_feedback',
+        'permission_callback' => '__return_true',
+    ));
 });
+
 
 // ✅ Frontend instellingen beschikbaar maken via AJAX
 add_action('wp_ajax_octopus_ai_get_settings', 'octopus_ai_get_settings');
@@ -89,13 +95,31 @@ EOT;
     $fallback = get_option('octopus_ai_fallback', 'Sorry, daar kan ik je niet mee helpen.');
     $model = get_option('octopus_ai_model', 'gpt-4.1-mini');
     $context = '';
-    $metas = [];
+$metas = [];
+$relevantFound = false;
 
-    if (function_exists('octopus_ai_retrieve_relevant_chunks')) {
-        $result = octopus_ai_retrieve_relevant_chunks($message);
-        $context = $result['context'] ?? '';
-        $metas   = $result['metas'] ?? [];
+if (function_exists('octopus_ai_retrieve_relevant_chunks')) {
+    $result = octopus_ai_retrieve_relevant_chunks($message);
+    $context = $result['context'] ?? '';
+    $metas   = $result['metas'] ?? [];
+
+    if (!empty($context) && strlen($context) > 50) {
+        $relevantFound = true;
     }
+}
+
+// ❌ Als er geen relevante context gevonden werd, geef direct fallback met zoeklink terug
+if (!$relevantFound) {
+    if (!function_exists('octopus_ai_extract_keyword')) {
+        require_once plugin_dir_path(__FILE__) . 'helpers/extract-keyword.php';
+    }
+
+    $keyword = octopus_ai_extract_keyword($message);
+    $zoeklink = 'https://login.octopus.be/manual/NL/hmftsearch.htm?zoom_query=' . rawurlencode($keyword);
+
+    $fallback_text = $fallback . "\n\n[Bekijk mogelijke info in de handleiding]($zoeklink)";
+    return do_shortcode($fallback_text);
+}
 
     // ➕ Prompt opbouwen
     $system_prompt = $tone . "\n\nContext:\n" . $context;
@@ -209,5 +233,35 @@ if (
     }
 }
 
+if (!function_exists('octopus_ai_log_interaction')) {
+    require_once plugin_dir_path(__FILE__) . 'includes/log-helper.php';
+}
+
+
+// ✅ Logging uitvoeren
+if (function_exists('octopus_ai_log_interaction')) {
+    $context_length = strlen($context);
+    $error_message  = $status === 'fail' ? json_encode($body) : '';
+    octopus_ai_log_interaction($message, $answer, $context_length, 'success', $error_message);
+}
+
+
 return do_shortcode($answer);
+
+}
+
+function octopus_ai_save_feedback($request) {
+    $feedback = sanitize_text_field($request->get_param('feedback'));
+    $answer   = sanitize_textarea_field($request->get_param('answer'));
+
+    if (!in_array($feedback, ['up', 'down'])) {
+        return new WP_Error('invalid_feedback', 'Ongeldige feedbackwaarde.');
+    }
+
+    $log = sprintf("[%s] Feedback: %s\nAntwoord: %s\n---\n", date('Y-m-d H:i:s'), strtoupper($feedback), $answer);
+    $upload_dir = wp_upload_dir();
+    $logfile = trailingslashit($upload_dir['basedir']) . 'octopus-ai-feedback.log';
+    file_put_contents($logfile, $log, FILE_APPEND);
+
+    return rest_ensure_response(['status' => 'ok']);
 }

@@ -11,6 +11,7 @@ document.addEventListener('DOMContentLoaded', function () {
     document.body.appendChild(chatbot);
 
     const settings = octopus_ai_chatbot_vars;
+    let sendCooldown = false;
 
     // ✅ CSS-variabelen instellen
     document.documentElement.style.setProperty('--primary-color', settings.primary_color);
@@ -114,11 +115,11 @@ chatReset.addEventListener('click', () => {
     const message = document.createElement('div');
     message.classList.add(sender === 'user' ? 'user-message' : 'bot-message');
 
-    const html = decodeURIComponent(escape(content))
+    const html = content
     .replace(/\\n/g, '<br>')
     .replace(/\\(.)/g, '$1')
-    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
-    .replace(/\*([^*]+)\*/g, '<em>$1</em>')
+    .replace(/(?<!\*)\*\*(.+?)\*\*(?!\*)/g, '<strong>$1</strong>')
+.replace(/(?<!\*)\*(?!\*)([^*]+)(?<!\*)\*(?!\*)/g, '<em>$1</em>')
     .replace(/\[([^\]]+)]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
 
 
@@ -126,14 +127,20 @@ chatReset.addEventListener('click', () => {
     message.innerHTML = html;
 
     if (sender === 'bot' && !options.isWelcome) {
-        const feedback = document.createElement('div');
-        feedback.className = 'feedback-buttons';
-        feedback.innerHTML = `
-            <button class="thumb-up" title="Nuttig">👍</button>
-            <button class="thumb-down" title="Niet nuttig">👎</button>
-        `;
-        message.appendChild(feedback);
-    }
+    const feedback = document.createElement('div');
+    feedback.className = 'feedback-buttons';
+    feedback.innerHTML = `
+        <button class="thumb-up" title="Nuttig">👍</button>
+        <button class="thumb-down" title="Niet nuttig">👎</button>
+    `;
+    message.appendChild(feedback);
+
+    // ✅ Eventlisteners
+    feedback.querySelector('.thumb-up').addEventListener('click', () => sendFeedback('up', message.innerText));
+    feedback.querySelector('.thumb-down').addEventListener('click', () => sendFeedback('down', message.innerText));
+}
+
+
 
     // Fallback-link
     if (sender === 'bot' && content.toLowerCase().includes('daar kan ik je niet mee helpen')) {
@@ -155,7 +162,10 @@ chatReset.addEventListener('click', () => {
     }
 
     chatMessages.appendChild(message);
-    chatMessages.scrollTop = chatMessages.scrollHeight;
+chatMessages.scrollTo({
+    top: chatMessages.scrollHeight,
+    behavior: 'smooth'
+});
 }
 
 
@@ -166,9 +176,13 @@ chatReset.addEventListener('click', () => {
     
 
     // ✅ Versturen
-    async function sendMessage() {
+   async function sendMessage() {
     const message = chatInput.value.trim();
-    if (!message) return;
+    if (!message || sendCooldown) return;
+
+    sendCooldown = true;
+    setTimeout(() => sendCooldown = false, 1500);
+
     addMessage(message, 'user');
     chatInput.value = '';
 
@@ -176,54 +190,46 @@ chatReset.addEventListener('click', () => {
     typing.classList.add('typing-indicator');
     typing.innerHTML = '<span class="dot"></span><span class="dot"></span><span class="dot"></span>';
     chatMessages.appendChild(typing);
-    chatMessages.scrollTop = chatMessages.scrollHeight;
+    chatMessages.scrollTo({ top: chatMessages.scrollHeight, behavior: 'smooth' });
 
-    // 🔁 Haal alle eerdere user + bot berichten op
-const fullHistory = Array.from(chatMessages.querySelectorAll('.user-message, .bot-message'))
-    .map(el => ({
-        role: el.classList.contains('user-message') ? 'user' : 'assistant',
-        content: el.innerText.trim()
-    }))
-    .filter(m => m.content.length > 0);
-
-// ❗ Beperk tot laatste 12 entries (6 uitwisselingen)
-const limitedHistory = fullHistory.slice(-12);
-
-// Voeg huidige vraag toe
-limitedHistory.push({ role: 'user', content: message });
-
+    const fullHistory = Array.from(chatMessages.querySelectorAll('.user-message, .bot-message'))
+        .map(el => ({
+            role: el.classList.contains('user-message') ? 'user' : 'assistant',
+            content: el.innerText.trim()
+        }))
+        .filter(m => m.content.length > 0)
+        .slice(-12); // Laatste 6 uitwisselingen
 
     try {
         const response = await fetch('/wp-json/octopus-ai/v1/chatbot', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ message, history: limitedHistory })
-});
-
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ message, history: fullHistory })
+        });
 
         const data = await response.text();
         typing.remove();
 
-        // Detecteer fallback
+        const bevatLink = data.includes('https://login.octopus.be/manual/NL/');
         const isFallback = data.trim().startsWith('Sorry, daar kan ik je niet mee helpen.');
 
-        // Check of er al een geldige handleidinglink in het antwoord zit
-        const bevatSlugLink = data.includes('login.octopus.be/manual/NL/') && (data.includes('page_slug') || data.includes('.html'));
-
-        if (isFallback && !bevatSlugLink) {
+        if (isFallback && !bevatLink) {
             const zoekterm = extractKeyword(message);
             const fallbackLink = `https://login.octopus.be/manual/NL/hmftsearch.htm?zoom_query=${encodeURIComponent(zoekterm)}`;
-            const enhanced = `${data}<br><a href="${fallbackLink}" target="_blank" rel="noopener noreferrer">Bekijk dit in de handleiding</a>`;
-            addMessage(enhanced, 'bot');
+            addMessage(`${data}<br><a href="${fallbackLink}" target="_blank" rel="noopener noreferrer"></a>`, 'bot');
         } else {
             addMessage(data, 'bot');
-            saveChatHistory(); 
         }
+
+        saveChatHistory();
 
     } catch (error) {
         typing.remove();
-        addMessage('Er ging iets mis. Probeer later opnieuw.', 'bot');
+        console.error('API-fout:', error);
+        addMessage('❌ Er ging iets mis met het ophalen van het antwoord. Controleer je internetverbinding of probeer later opnieuw.', 'bot');
     }
+
+
 }
 
 function extractKeyword(question) {
@@ -233,6 +239,32 @@ function extractKeyword(question) {
     return keywords[0] || 'octopus';
 }
 
+function sendFeedback(type, answer) {
+    fetch('/wp-json/octopus-ai/v1/feedback', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ feedback: type, answer })
+    }).then(() => {
+        alert(type === 'up' ? 'Bedankt voor je positieve feedback!' : 'We bekijken je feedback – dank je!');
+    });
+}
 
+// ⏳ Automatisch afsluiten na inactiviteit
+let inactivityTimer;
+
+function resetInactivityTimer() {
+    clearTimeout(inactivityTimer);
+    inactivityTimer = setTimeout(() => {
+        if (chatbot.style.display === 'flex') {
+            closeChatbot();
+        }
+    }, 5 * 60 * 1000); // 5 minuten
+}
+
+// Reset timer bij interactie
+['click', 'keydown', 'mousemove'].forEach(event => {
+    chatbot.addEventListener(event, resetInactivityTimer);
+});
+resetInactivityTimer();
 
 });
