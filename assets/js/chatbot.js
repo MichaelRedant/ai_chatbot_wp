@@ -141,7 +141,7 @@ chatReset.addEventListener('click', () => {
 }
 
 
-
+    // ✅ Styling voor berichten
     // Fallback-link
     if (sender === 'bot' && content.toLowerCase().includes('daar kan ik je niet mee helpen')) {
         const lastUserMessages = Array.from(document.querySelectorAll('.user-message'));
