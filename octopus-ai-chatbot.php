@@ -19,7 +19,7 @@ require_once plugin_dir_path(__FILE__) . 'admin/sitemap-handler.php';
 // ✅ Includes
 require_once plugin_dir_path(__FILE__) . 'includes/api-handler.php';
 require_once plugin_dir_path(__FILE__) . 'includes/pdf-parser.php';
-require_once plugin_dir_path(__FILE__) . 'includes/chunker.php';
+require_once plugin_dir_path(__FILE__) . 'includes/pdf-chunker.php';
 require_once plugin_dir_path(__FILE__) . 'includes/context-retriever.php';
 require_once plugin_dir_path(__FILE__) . 'includes/logger.php';
 require_once plugin_dir_path(__FILE__) . 'includes/sitemap-parser.php';
@@ -49,7 +49,13 @@ function octopus_ai_should_display_chatbot() {
 // ✅ Frontend scripts + wp_localize_script met settings
 function octopus_ai_enqueue_frontend_assets() {
     wp_enqueue_style('octopus-ai-chatbot-style', plugin_dir_url(__FILE__) . 'assets/css/chatbot.css', array(), '1.0');
-    wp_enqueue_script('octopus-ai-chatbot-script', plugin_dir_url(__FILE__) . 'assets/js/chatbot.js', array('jquery'), '1.0', true);
+    wp_enqueue_script(
+        'octopus-ai-chatbot-script',
+        plugin_dir_url(__FILE__) . 'assets/js/chatbot.js',
+        array('jquery'),
+        '1.0',
+        true
+    );
 
     // Chatbot settings beschikbaar maken in JS
    wp_localize_script('octopus-ai-chatbot-script', 'octopus_ai_chatbot_vars', array(

@@ -234,15 +234,13 @@ if (
 }
 
 if (!function_exists('octopus_ai_log_interaction')) {
-    require_once plugin_dir_path(__FILE__) . 'includes/log-helper.php';
+    require_once plugin_dir_path(__FILE__) . 'log-helper.php';
 }
-
 
 // ✅ Logging uitvoeren
 if (function_exists('octopus_ai_log_interaction')) {
     $context_length = strlen($context);
-    $error_message  = $status === 'fail' ? json_encode($body) : '';
-    octopus_ai_log_interaction($message, $answer, $context_length, 'success', $error_message);
+    octopus_ai_log_interaction($message, $answer, $context_length, 'success');
 }
 
 
