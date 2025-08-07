@@ -117,10 +117,20 @@ function octopus_ai_auto_fetch_sitemap() {
 }
 
 /**
- * ✅ Parse sitemap-bestand en haal alle <loc> elementen op
+ * ✅ Parse een sitemap of indexbestand (ook met sub-sitemaps)
  */
-function octopus_ai_parse_sitemap($path) {
-    $sitemap_xml = file_get_contents($path);
+function octopus_ai_parse_sitemap($source, &$visited = []) {
+    if (isset($visited[$source])) return [];
+    $visited[$source] = true;
+
+    if (filter_var($source, FILTER_VALIDATE_URL)) {
+        $response = wp_remote_get($source);
+        if (is_wp_error($response)) return [];
+        $sitemap_xml = wp_remote_retrieve_body($response);
+    } else {
+        if (!file_exists($source)) return [];
+        $sitemap_xml = file_get_contents($source);
+    }
     if (!$sitemap_xml) return [];
 
     libxml_use_internal_errors(true);
@@ -128,16 +138,30 @@ function octopus_ai_parse_sitemap($path) {
     if (!$xml) return [];
 
     $namespaces = $xml->getDocNamespaces(true);
-    if (isset($namespaces[''])) {
-        $xml->registerXPathNamespace('ns', $namespaces['']);
-        $entries = $xml->xpath('//ns:url/ns:loc');
-    } else {
-        $entries = $xml->xpath('//url/loc');
-    }
+    $root = $xml->getName();
 
     $urls = [];
-    foreach ($entries as $loc) {
-        $urls[] = (string) $loc;
+    if ($root === 'urlset') {
+        if (isset($namespaces[''])) {
+            $xml->registerXPathNamespace('ns', $namespaces['']);
+            $entries = $xml->xpath('//ns:url/ns:loc');
+        } else {
+            $entries = $xml->xpath('//url/loc');
+        }
+        foreach ($entries as $loc) {
+            $urls[] = (string) $loc;
+        }
+    } elseif ($root === 'sitemapindex') {
+        if (isset($namespaces[''])) {
+            $xml->registerXPathNamespace('ns', $namespaces['']);
+            $entries = $xml->xpath('//ns:sitemap/ns:loc');
+        } else {
+            $entries = $xml->xpath('//sitemap/loc');
+        }
+        foreach ($entries as $loc) {
+            $child = (string) $loc;
+            $urls = array_merge($urls, octopus_ai_parse_sitemap($child, $visited));
+        }
     }
 
     return $urls;
