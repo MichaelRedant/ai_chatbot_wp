@@ -78,6 +78,7 @@ function octopus_ai_auto_fetch_sitemap() {
         !wp_verify_nonce($_POST['octopus_ai_auto_sitemap_nonce'], 'octopus_ai_auto_sitemap')
     ) {
         wp_die('Beveiligingsfout bij automatische sitemap.');
+
     }
 
     $site_url = esc_url_raw(trim($_POST['octopus_ai_site_url'] ?? ''));
@@ -196,7 +197,10 @@ function octopus_ai_find_sitemap_url($site_url) {
                 }
             }
         }
+
     }
+    if (!$sitemap_xml) return [];
+
 
     // Fallback naar standaard locaties
     $candidates = [

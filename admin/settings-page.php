@@ -90,12 +90,15 @@ function octopus_ai_handle_pdf_upload() {
                 $chunks = $chunker->chunkPdfWithMetadata($filepath, $slug);
 
                 // verwijder bestaande chunks voor dit PDF-bestand
+
                 foreach (glob($chunks_dir . $slug . '_chunk_*.json') as $old) {
+
                     unlink($old);
                 }
 
                 foreach ($chunks as $i => $chunk) {
                     $meta = $chunk['metadata'];
+
                     $file = $chunks_dir . $slug . '_chunk_' . ($i + 1) . '.json';
                     $data = [
                         'content'  => $chunk['content'],
@@ -107,6 +110,7 @@ function octopus_ai_handle_pdf_upload() {
                         ],
                     ];
                     file_put_contents($file, wp_json_encode($data, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT));
+
                 }
             }
         }
@@ -137,7 +141,9 @@ function octopus_ai_handle_delete_file() {
         $ext = pathinfo($safe_file, PATHINFO_EXTENSION);
         if ($ext === 'pdf') {
             $slug = basename($safe_file, '.pdf');
+
             foreach (glob($chunks_dir . $slug . '_chunk_*.json') as $chunk) {
+
                 unlink($chunk);
             }
         } elseif ($ext === 'xml') {
@@ -180,7 +186,9 @@ function octopus_ai_handle_bulk_delete() {
             $ext = pathinfo($safe_name, PATHINFO_EXTENSION);
             if ($ext === 'pdf') {
                 $slug = basename($safe_name, '.pdf');
+
                 foreach (glob($chunks_dir . $slug . '_chunk_*.json') as $chunk) {
+
                     unlink($chunk);
                 }
             } elseif ($ext === 'xml') {
@@ -346,8 +354,10 @@ function octopus_ai_settings_page() {
         <?php if (isset($_GET['upload']) && $_GET['upload'] === 'success'): ?>
             <div class="notice notice-success is-dismissible"><p>PDF's succesvol geüpload en verwerkt.</p></div>
         <?php endif; ?>
+
         <?php if (isset($_GET['upload']) && $_GET['upload'] === 'sitemap' && isset($_GET['found']) && isset($_GET['pages'])): ?>
             <div class="notice notice-success is-dismissible"><p><?php echo intval($_GET['found']); ?> URL(s) gevonden en <?php echo intval($_GET['pages']); ?> pagina's gecrawld.</p></div>
+
         <?php endif; ?>
         <?php if (isset($_GET['delete']) && $_GET['delete'] === 'success'): ?>
             <div class="notice notice-success is-dismissible"><p>Bestand succesvol verwijderd.</p></div>
