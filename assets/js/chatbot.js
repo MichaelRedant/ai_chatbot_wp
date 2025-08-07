@@ -11,6 +11,15 @@ document.addEventListener('DOMContentLoaded', function () {
     document.body.appendChild(chatbot);
 
     const settings = octopus_ai_chatbot_vars;
+const fallbackTrigger = settings.i18n.fallback_trigger || "Sorry, daar kan ik je niet mee helpen.";
+
+    let lang = octopus_ai_chatbot_vars.lang;
+if (!lang || lang === '') {
+    const browserLang = navigator.language || navigator.userLanguage || 'nl';
+    lang = browserLang.toLowerCase().startsWith('fr') ? 'FR' : 'NL';
+}
+
+
     let sendCooldown = false;
 
     // ✅ CSS-variabelen instellen
@@ -27,7 +36,8 @@ document.addEventListener('DOMContentLoaded', function () {
             <button id="chat-close" aria-label="Sluiten" class="chat-close-button">&times;</button>
         </div>
         <div id="chat-messages"></div>
-        <button id="chat-reset" class="chat-reset-button" title="Reset gesprek">🔄 Vernieuw</button>
+        <button id="chat-reset" class="chat-reset-button" title="${settings.i18n.reset_title || 'Reset'}">🔄 ${settings.i18n.reset_button || 'Vernieuw'}</button>
+
 
         <div id="chat-input-container">
             <input type="text" id="chat-input" placeholder="Typ je vraag..." />
@@ -55,28 +65,42 @@ document.addEventListener('DOMContentLoaded', function () {
     }
 
     // ✅ Openen
-    toggleButton.addEventListener('click', () => {
-        chatbot.classList.remove('fade-out');
-        chatbot.classList.add('fade-in');
-        chatbot.style.display = 'flex';
-        toggleButton.style.display = 'none';
+   toggleButton.addEventListener('click', () => {
+    chatbot.classList.remove('fade-out');
+    chatbot.classList.add('fade-in');
+    chatbot.style.display = 'flex';
+    toggleButton.style.display = 'none';
 
-        if (settings.welcome_message && !sessionStorage.getItem('octopus_chat_welcomed')) {
-            setTimeout(() => {
-                addMessage(settings.welcome_message, 'bot', { isWelcome: true });
-                saveChatHistory();
-                sessionStorage.setItem('octopus_chat_welcomed', 'true');
-            }, 300);
+    const sessionKey = `octopus_chat_welcomed_${lang}`;
+    if (!sessionStorage.getItem(sessionKey)) {
+        let welcome = settings.welcome_message;
+        if (!welcome || welcome.trim() === '') {
+            welcome = (lang === 'FR')
+                ? "👋 Bonjour ! Comment puis-je t’aider aujourd’hui ?"
+                : "👋 Hallo! Hoe kan ik je vandaag helpen?";
         }
-    });
+
+        setTimeout(() => {
+            addMessage(welcome, 'bot', { isWelcome: true });
+            saveChatHistory();
+            sessionStorage.setItem(sessionKey, 'true');
+        }, 300);
+    }
+});
 
     // ✅ Sluiten
     chatClose.addEventListener('click', closeChatbot);
     const chatReset = document.getElementById('chat-reset');
+    chatReset.innerHTML = `🔄 ${settings.i18n.reset_button || 'Vernieuw'}`;
+    chatInput.placeholder = settings.i18n.placeholder;
+chatSend.textContent  = settings.i18n.send;
+chatReset.title       = settings.i18n.reset_title;
+
+
 chatReset.addEventListener('click', () => {
-    if (confirm('Weet je zeker dat je het gesprek wilt vernieuwen?')) {
+    if (confirm(settings.i18n.reset_confirm)) {
         sessionStorage.removeItem('octopus_chat_history');
-        sessionStorage.removeItem('octopus_chat_welcomed');
+        sessionStorage.removeItem(sessionKey);
         chatMessages.innerHTML = '';
         if (settings.welcome_message) {
             addMessage(settings.welcome_message, 'bot', { isWelcome: true });
@@ -130,9 +154,10 @@ chatReset.addEventListener('click', () => {
     const feedback = document.createElement('div');
     feedback.className = 'feedback-buttons';
     feedback.innerHTML = `
-        <button class="thumb-up" title="Nuttig">👍</button>
-        <button class="thumb-down" title="Niet nuttig">👎</button>
-    `;
+    <button class="thumb-up" title="${settings.i18n.feedback_up}">👍</button>
+    <button class="thumb-down" title="${settings.i18n.feedback_down}">👎</button>
+`;
+
     message.appendChild(feedback);
 
     // ✅ Eventlisteners
@@ -143,7 +168,7 @@ chatReset.addEventListener('click', () => {
 
 
     // Fallback-link
-    if (sender === 'bot' && content.toLowerCase().includes('daar kan ik je niet mee helpen')) {
+    if (sender === 'bot' && fallbackTrigger && content.trim().toLowerCase().startsWith(fallbackTrigger.toLowerCase())) {
         const lastUserMessages = Array.from(document.querySelectorAll('.user-message'));
         const lastQuestion = lastUserMessages.length > 0 ? lastUserMessages.at(-1).innerText : '';
         const keyword = extractKeyword(lastQuestion);
@@ -151,13 +176,13 @@ chatReset.addEventListener('click', () => {
         const fallbackLink = document.createElement('div');
         fallbackLink.className = 'fallback-link';
         fallbackLink.innerHTML = `
-            <div style="margin-top:6px; font-size:12px; color:#666;">
-                ℹ️ Misschien vind je het antwoord wel in onze handleiding:<br>
-                <a href="https://login.octopus.be/manual/NL/hmftsearch.htm?zoom_query=${encodeURIComponent(keyword)}" target="_blank" style="color: var(--primary-color); text-decoration: underline;">
-                    Bekijk dit in de handleiding
-                </a>
-            </div>
-        `;
+<div style="margin-top:6px; font-size:12px; color:#666;">
+    ${settings.i18n.fallback_prefix}<br>
+    <a href="https://login.octopus.be/manual/${lang}/hmftsearch.htm?zoom_query=${encodeURIComponent(keyword)}" target="_blank" style="color: var(--primary-color); text-decoration: underline;">
+        ${settings.i18n.fallback_button}
+    </a>
+</div>
+`;
         message.appendChild(fallbackLink);
     }
 
@@ -210,13 +235,17 @@ chatMessages.scrollTo({
         const data = await response.text();
         typing.remove();
 
-        const bevatLink = data.includes('https://login.octopus.be/manual/NL/');
-        const isFallback = data.trim().startsWith('Sorry, daar kan ik je niet mee helpen.');
+        const bevatLink = data.includes(`https://login.octopus.be/manual/${lang}/`);
+
+
+const isFallback = data.trim().toLowerCase().startsWith(fallbackTrigger.toLowerCase());
 
         if (isFallback && !bevatLink) {
             const zoekterm = extractKeyword(message);
-            const fallbackLink = `https://login.octopus.be/manual/NL/hmftsearch.htm?zoom_query=${encodeURIComponent(zoekterm)}`;
-            addMessage(`${data}<br><a href="${fallbackLink}" target="_blank" rel="noopener noreferrer"></a>`, 'bot');
+            const fallbackLink = `https://login.octopus.be/manual/${lang}/hmftsearch.htm?zoom_query=${encodeURIComponent(zoekterm)}`;
+
+            addMessage(`${data}<br><a href="${fallbackLink}" target="_blank" rel="noopener noreferrer">${settings.i18n.fallback_button}</a>`, 'bot');
+
         } else {
             addMessage(data, 'bot');
         }
@@ -226,7 +255,8 @@ chatMessages.scrollTo({
     } catch (error) {
         typing.remove();
         console.error('API-fout:', error);
-        addMessage('❌ Er ging iets mis met het ophalen van het antwoord. Controleer je internetverbinding of probeer later opnieuw.', 'bot');
+        addMessage(settings.i18n.api_error, 'bot');
+
     }
 
 
@@ -245,7 +275,9 @@ function sendFeedback(type, answer) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ feedback: type, answer })
     }).then(() => {
-        alert(type === 'up' ? 'Bedankt voor je positieve feedback!' : 'We bekijken je feedback – dank je!');
+        alert(type === 'up' ? settings.i18n.feedback_up : settings.i18n.feedback_down);
+
+
     });
 }
 
