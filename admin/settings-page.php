@@ -313,6 +313,9 @@ function octopus_ai_settings_page() {
         <?php if (isset($_GET['upload']) && $_GET['upload'] === 'success'): ?>
             <div class="notice notice-success is-dismissible"><p>PDF's succesvol geüpload en verwerkt.</p></div>
         <?php endif; ?>
+        <?php if (isset($_GET['upload']) && $_GET['upload'] === 'sitemap' && isset($_GET['found'])): ?>
+            <div class="notice notice-success is-dismissible"><p><?php echo intval($_GET['found']); ?> URL(s) gevonden in de sitemap.</p></div>
+        <?php endif; ?>
         <?php if (isset($_GET['delete']) && $_GET['delete'] === 'success'): ?>
             <div class="notice notice-success is-dismissible"><p>Bestand succesvol verwijderd.</p></div>
         <?php endif; ?>
@@ -515,6 +518,13 @@ function octopus_ai_settings_page() {
     <form method="post">
         <input type="url" name="sitemap_url" value="<?php echo esc_attr(get_option('octopus_ai_sitemap_url', '')); ?>" style="width:400px;" placeholder="https://example.com/sitemap.xml" />
         <?php submit_button('💾 Sitemap opslaan'); ?>
+    </form>
+    
+    <form method="post" action="<?php echo admin_url('admin-post.php'); ?>" style="margin-top:15px;">
+        <?php wp_nonce_field('octopus_ai_auto_sitemap', 'octopus_ai_auto_sitemap_nonce'); ?>
+        <input type="hidden" name="action" value="octopus_ai_auto_fetch_sitemap">
+        <input type="url" name="octopus_ai_site_url" style="width:400px;" placeholder="https://example.com" required />
+        <?php submit_button('🔎 Zoek sitemap automatisch', 'secondary'); ?>
     </form>
 </div>
 

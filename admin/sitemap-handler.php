@@ -1,7 +1,8 @@
 <?php
 // ✅ Hook om sitemap-upload te verwerken
 add_action('admin_post_octopus_ai_upload_sitemap', 'octopus_ai_handle_sitemap_upload');
-
+// 🔎 Automatisch sitemap ophalen via website-URL
+add_action('admin_post_octopus_ai_auto_fetch_sitemap', 'octopus_ai_auto_fetch_sitemap');
 /**
  * ✅ Verwerkt sitemap-upload of remote-URL en parseert URL's
  */
@@ -63,6 +64,57 @@ function octopus_ai_handle_sitemap_upload() {
     exit;
 }
 
+/**
+ * 🔎 Zoek automatisch de sitemap van een website en parseer URL's
+ */
+function octopus_ai_auto_fetch_sitemap() {
+    if (
+        !current_user_can('manage_options') ||
+        !isset($_POST['octopus_ai_auto_sitemap_nonce']) ||
+        !wp_verify_nonce($_POST['octopus_ai_auto_sitemap_nonce'], 'octopus_ai_auto_sitemap')
+    ) {
+        wp_die('Beveiligingsfout bij automatische sitemap.');
+    }
+
+    $site_url = esc_url_raw(trim($_POST['octopus_ai_site_url'] ?? ''));
+    if (empty($site_url)) {
+        wp_die('Geen website opgegeven.');
+    }
+
+    $sitemap_url = octopus_ai_find_sitemap_url($site_url);
+    if (!$sitemap_url) {
+        wp_die('Geen sitemap gevonden bij de opgegeven website.');
+    }
+
+    $upload_dir = wp_upload_dir();
+    $upload_path = trailingslashit($upload_dir['basedir']) . 'octopus-chatbot/';
+    if (!file_exists($upload_path)) wp_mkdir_p($upload_path);
+
+    $response = wp_remote_get($sitemap_url);
+    if (is_wp_error($response)) {
+        wp_die('Kon sitemap niet ophalen.');
+    }
+
+    $content = wp_remote_retrieve_body($response);
+    if (!$content) {
+        wp_die('Sitemap is leeg.');
+    }
+
+    $filename = 'auto_' . md5($sitemap_url) . '.xml';
+    $destination = $upload_path . $filename;
+    file_put_contents($destination, $content);
+
+    $urls = octopus_ai_parse_sitemap($destination);
+    if (empty($urls)) {
+        wp_die('Geen URL\'s gevonden in de sitemap.');
+    }
+
+    update_option('octopus_ai_sitemap_url', $sitemap_url);
+    update_option('octopus_ai_sitemap_urls', array_unique($urls));
+
+    wp_redirect(admin_url('admin.php?page=octopus-ai-chatbot&upload=sitemap&found=' . count($urls)));
+    exit;
+}
 
 /**
  * ✅ Parse sitemap-bestand en haal alle <loc> elementen op
@@ -89,6 +141,44 @@ function octopus_ai_parse_sitemap($path) {
     }
 
     return $urls;
+}
+
+/**
+ * 📡 Vind een sitemap-URL via robots.txt of standaard paden
+ */
+function octopus_ai_find_sitemap_url($site_url) {
+    $site_url = trailingslashit($site_url);
+
+    // Eerst robots.txt raadplegen
+    $robots_url = $site_url . 'robots.txt';
+    $response = wp_remote_get($robots_url);
+    if (!is_wp_error($response)) {
+        $body = wp_remote_retrieve_body($response);
+        if ($body) {
+            foreach (explode("\n", $body) as $line) {
+                if (stripos($line, 'sitemap:') === 0) {
+                    $candidate = trim(substr($line, 8));
+                    if (filter_var($candidate, FILTER_VALIDATE_URL)) {
+                        return $candidate;
+                    }
+                }
+            }
+        }
+    }
+
+    // Fallback naar standaard locaties
+    $candidates = [
+        $site_url . 'sitemap.xml',
+        $site_url . 'sitemap_index.xml'
+    ];
+    foreach ($candidates as $url) {
+        $head = wp_remote_head($url);
+        if (!is_wp_error($head) && wp_remote_retrieve_response_code($head) == 200) {
+            return $url;
+        }
+    }
+
+    return '';
 }
 
 // ✅ Crawlen & chunks genereren uit sitemap-URLs
