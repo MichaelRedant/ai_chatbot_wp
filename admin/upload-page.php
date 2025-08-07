@@ -36,8 +36,13 @@ function octopus_ai_pdf_upload_page() {
                     wp_mkdir_p($chunks_dir);
                 }
 
+                $slug = basename($file_path, '.pdf');
+                foreach (glob($chunks_dir . $slug . '_chunk_*.txt') as $old) {
+                    unlink($old);
+                }
+
                 foreach ($chunks as $index => $chunk) {
-                    $chunk_file = $chunks_dir . basename($file_path) . '_chunk_' . $index . '.txt';
+                    $chunk_file = $chunks_dir . $slug . '_chunk_' . $index . '.txt';
                     file_put_contents($chunk_file, $chunk);
                 }
 
