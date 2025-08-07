@@ -131,16 +131,21 @@ function octopus_ai_auto_fetch_sitemap() {
 function octopus_ai_parse_sitemap($source, &$visited = []) {
     if (isset($visited[$source])) return [];
     $visited[$source] = true;
+    $sitemap_xml = '';
 
     if (filter_var($source, FILTER_VALIDATE_URL)) {
         $response = wp_remote_get($source);
-        if (is_wp_error($response)) return [];
+        if (is_wp_error($response)) {
+            return [];
+        }
         $sitemap_xml = wp_remote_retrieve_body($response);
-    } else {
-        if (!file_exists($source)) return [];
+    } elseif (file_exists($source)) {
         $sitemap_xml = file_get_contents($source);
     }
-    if (!$sitemap_xml) return [];
+
+    if (!$sitemap_xml) {
+        return [];
+    }
 
     libxml_use_internal_errors(true);
     $xml = simplexml_load_string($sitemap_xml);
@@ -171,7 +176,10 @@ function octopus_ai_parse_sitemap($source, &$visited = []) {
             $child = (string) $loc;
             $urls = array_merge($urls, octopus_ai_parse_sitemap($child, $visited));
         }
+
     }
+    if (!$sitemap_xml) return [];
+
 
     return $urls;
 }
@@ -197,10 +205,7 @@ function octopus_ai_find_sitemap_url($site_url) {
                 }
             }
         }
-
     }
-    if (!$sitemap_xml) return [];
-
 
     // Fallback naar standaard locaties
     $candidates = [
@@ -213,6 +218,7 @@ function octopus_ai_find_sitemap_url($site_url) {
             return $url;
         }
     }
+
 
     return '';
 }
