@@ -344,8 +344,10 @@ function octopus_ai_settings_page() {
         <?php if (isset($_GET['upload']) && $_GET['upload'] === 'success'): ?>
             <div class="notice notice-success is-dismissible"><p>PDF's succesvol geüpload en verwerkt.</p></div>
         <?php endif; ?>
+
         <?php if (isset($_GET['upload']) && $_GET['upload'] === 'sitemap' && isset($_GET['found']) && isset($_GET['pages'])): ?>
             <div class="notice notice-success is-dismissible"><p><?php echo intval($_GET['found']); ?> URL(s) gevonden en <?php echo intval($_GET['pages']); ?> pagina's gecrawld.</p></div>
+
         <?php endif; ?>
         <?php if (isset($_GET['delete']) && $_GET['delete'] === 'success'): ?>
             <div class="notice notice-success is-dismissible"><p>Bestand succesvol verwijderd.</p></div>
