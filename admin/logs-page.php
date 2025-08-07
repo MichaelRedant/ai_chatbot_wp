@@ -69,11 +69,6 @@ $total_items = $wpdb->get_var($wpdb->prepare("SELECT COUNT(*) FROM {$table_name}
     <div class="wrap">
         <h1>📊 Octopus AI Logging Dashboard</h1>
 
-        <h2 class="nav-tab-wrapper">
-            <a href="<?php echo admin_url('admin.php?page=octopus-ai-chatbot'); ?>" class="nav-tab">Instellingen</a>
-            <a href="<?php echo admin_url('admin.php?page=octopus-ai-chatbot-logs'); ?>" class="nav-tab nav-tab-active">Logging</a>
-        </h2>
-
         <form method="get" style="margin-bottom: 15px;">
             <input type="hidden" name="page" value="octopus-ai-chatbot-logs" />
             <input type="search" name="s" value="<?php echo esc_attr($search); ?>" placeholder="Zoek in vragen of antwoorden..." style="width: 240px;" />
