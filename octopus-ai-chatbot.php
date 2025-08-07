@@ -10,6 +10,7 @@ if (!defined('ABSPATH')) exit; // Veiligheid
 
 // ✅ Admin pagina’s
 require_once plugin_dir_path(__FILE__) . 'admin/settings-page.php';
+require_once plugin_dir_path(__FILE__) . 'admin/upload-page.php';
 require_once plugin_dir_path(__FILE__) . 'admin/logs-page.php';
 require_once plugin_dir_path(__FILE__) . 'admin/sitemap-handler.php';
 
