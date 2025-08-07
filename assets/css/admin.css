@@ -1,0 +1,25 @@
+/* Admin styles for Octopus AI Chatbot */
+.octopus-settings .form-table th {
+    width: 200px;
+}
+
+.octopus-settings .octopus-tab {
+    display: none;
+}
+
+.octopus-settings .octopus-tab.active {
+    display: block;
+}
+
+.octopus-settings .upload-box {
+    background: #fff;
+    border: 1px solid #ddd;
+    border-left: 4px solid var(--primary-color, #0f6c95);
+    padding: 20px;
+    margin-top: 20px;
+    border-radius: 8px;
+}
+
+.octopus-settings .octopus-inner-tabs {
+    margin-top: 20px;
+}

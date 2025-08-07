@@ -21,10 +21,17 @@ function octopus_ai_add_admin_menu() {
 
 // --- ADMIN SCRIPTS ---
 add_action('admin_enqueue_scripts', function($hook) {
-    if ($hook === 'toplevel_page_octopus-ai-chatbot') {
+    $pages = array(
+        'toplevel_page_octopus-ai-chatbot',
+        'octopus-ai-chatbot_page_octopus-ai-chatbot-logs'
+    );
+
+    if (in_array($hook, $pages, true)) {
         wp_enqueue_style('wp-color-picker');
         wp_enqueue_script('wp-color-picker');
         wp_enqueue_media();
+        wp_enqueue_style('octopus-ai-admin', plugin_dir_url(__FILE__) . '../assets/css/admin.css', array(), '1.0');
+        wp_enqueue_script('octopus-ai-admin-tabs', plugin_dir_url(__FILE__) . '../assets/js/admin-tabs.js', array('jquery'), '1.0', true);
         wp_enqueue_script('octopus-ai-admin-color-picker', plugin_dir_url(__FILE__) . '../assets/js/admin-color-picker.js', array('wp-color-picker'), false, true);
         wp_enqueue_script('octopus-ai-admin-media', plugin_dir_url(__FILE__) . '../assets/js/admin-media-uploader.js', array('jquery'), '1.0', true);
     }
@@ -221,136 +228,20 @@ function octopus_ai_settings_page() {
     $masked_key = $api_key ? substr($api_key, 0, 5) . str_repeat('*', strlen($api_key) - 10) . substr($api_key, -5) : '';
     $selected_model = get_option('octopus_ai_model', 'gpt-4.1-mini');
     ?>
-    <style>
-    .octopus-settings .form-table th {
-        width: 200px;
-        font-weight: 600;
-        color: #222;
-    }
-
-    .octopus-settings .form-table td {
-        padding-bottom: 10px;
-    }
-
-    .octopus-settings h2 {
-        border-left: 4px solid var(--primary-color, #0f6c95);
-        padding-left: 10px;
-        margin-top: 40px;
-        font-size: 20px;
-        color: #0f6c95;
-    }
-
-    .collapsible-heading {
-    cursor: pointer;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    background: #f3f4f6;
-    padding: 10px;
-    border-left: 4px solid var(--primary-color, #0f6c95);
-    font-size: 16px;
-    margin-top: 40px;
-    border-radius: 4px;
-}
-
-.collapsible-heading .toggle-arrow {
-    font-size: 14px;
-    margin-left: 10px;
-    transition: transform 0.3s ease;
-}
-
-.collapsible-heading.collapsed .toggle-arrow {
-    transform: rotate(-90deg);
-}
-
-.collapsible-content {
-    display: block;
-    margin-top: 10px;
-    transition: all 0.3s ease;
-}
-.collapsible-content.hidden {
-    display: none;
-}
-
-    .octopus-settings input[type="text"],
-    .octopus-settings input[type="url"],
-    .octopus-settings textarea,
-    .octopus-settings select {
-        width: 100%;
-        max-width: 500px;
-        padding: 6px 10px;
-        border-radius: 4px;
-        border: 1px solid #ccc;
-    }
-
-    .octopus-settings .button-primary {
-        background-color: #0f6c95;
-        border-color: #0f6c95;
-        box-shadow: none;
-    }
-
-    .octopus-settings ul {
-        list-style: none;
-        padding-left: 0;
-    }
-
-    .octopus-settings ul li {
-        margin-bottom: 6px;
-    }
-
-    .octopus-settings .notice {
-        margin-top: 20px;
-    }
-
-    .octopus-settings hr {
-        margin-top: 40px;
-        margin-bottom: 40px;
-        border-color: #ddd;
-    }
-
-    .octopus-settings .widefat th,
-    .octopus-settings .widefat td {
-        font-size: 13px;
-    }
-
-    .octopus-settings .section-description {
-        font-style: italic;
-        color: #666;
-        margin-top: -8px;
-        margin-bottom: 15px;
-    }
-
-    .octopus-settings .upload-box {
-    background: #fefefe;
-    border: 1px solid #ddd;
-    border-left: 5px solid var(--primary-color, #0f6c95);
-    padding: 20px;
-    margin-top: 20px;
-    border-radius: 8px;
-    box-shadow: 0 1px 2px rgba(0,0,0,0.05);
-}
-
-.octopus-settings .upload-box h3 {
-    margin-top: 0;
-    margin-bottom: 10px;
-    font-size: 17px;
-    color: #0f6c95;
-    display: flex;
-    align-items: center;
-    gap: 8px;
-}
-
-.octopus-settings .upload-box input[type="file"],
-.octopus-settings .upload-box input[type="url"] {
-    margin-top: 5px;
-    margin-bottom: 10px;
-}
-
-</style>
-
     <div class="wrap octopus-settings">
-        <h1>AI Chatbot Instellingen</h1>
+        <h1>AI Chatbot</h1>
 
+        <h2 class="nav-tab-wrapper">
+            <a href="<?php echo admin_url('admin.php?page=octopus-ai-chatbot'); ?>" class="nav-tab nav-tab-active">Instellingen</a>
+            <a href="<?php echo admin_url('admin.php?page=octopus-ai-chatbot-logs'); ?>" class="nav-tab">Logging</a>
+        </h2>
+
+        <h2 class="nav-tab-wrapper octopus-inner-tabs">
+            <a href="#octopus-tab-settings" class="nav-tab nav-tab-active">Instellingen</a>
+            <a href="#octopus-tab-uploads" class="nav-tab">Uploads</a>
+        </h2>
+
+        <div id="octopus-tab-settings" class="octopus-tab active">
         <?php if (isset($_GET['upload']) && $_GET['upload'] === 'success'): ?>
             <div class="notice notice-success is-dismissible"><p>PDF's succesvol geüpload en verwerkt.</p></div>
         <?php endif; ?>
@@ -497,14 +388,9 @@ function octopus_ai_settings_page() {
 
             <?php submit_button('Instellingen opslaan'); ?>
         </form>
-    </div>
-        <hr>
+        </div><!-- /octopus-tab-settings -->
 
-        <h2 class="collapsible-heading" onclick="toggleSection(this)">
-    🗂️ Geüploade Bestanden <span class="toggle-arrow">▼</span>
-</h2>
-        <div class="collapsible-content hidden">
-
+        <div id="octopus-tab-uploads" class="octopus-tab">
         <div class="upload-box">
     <h3>📄 PDF-handleidingen uploaden</h3>
     <form method="post" action="<?php echo admin_url('admin-post.php'); ?>" enctype="multipart/form-data">
@@ -689,11 +575,8 @@ if (file_exists($chunk_dir)) {
     echo '<p><em>De chunks-folder bestaat nog niet.</em></p>';
 }
 ?>
-
-        </div>
-
-
-<hr>
+        </div><!-- /octopus-tab-uploads -->
+    </div><!-- /wrap -->
 
 <script>
 document.addEventListener('DOMContentLoaded', function () {
@@ -713,23 +596,14 @@ document.addEventListener('DOMContentLoaded', function () {
     }
 });
 </script>
+
 <script>
-function toggleSection(header) {
-    const content = header.nextElementSibling;
-    content.classList.toggle('hidden');
-    header.classList.toggle('collapsed');
-}
+document.getElementById('octopus_ai_display_mode').addEventListener('change', function() {
+    const row = document.getElementById('octopus_ai_page_selector_row');
+    row.style.display = this.value === 'selected' ? '' : 'none';
+});
 </script>
 
-
-    </div>
-
-    <script>
-        document.getElementById('octopus_ai_display_mode').addEventListener('change', function() {
-            const row = document.getElementById('octopus_ai_page_selector_row');
-            row.style.display = this.value === 'selected' ? '' : 'none';
-        });
-    </script>
 <?php if (isset($_GET['upload']) || isset($_GET['sitemap_debug'])): ?>
 <script>
     document.addEventListener('DOMContentLoaded', function () {
