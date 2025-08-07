@@ -3,6 +3,7 @@
 add_action('admin_post_octopus_ai_upload_sitemap', 'octopus_ai_handle_sitemap_upload');
 // 🔎 Automatisch sitemap ophalen via website-URL
 add_action('admin_post_octopus_ai_auto_fetch_sitemap', 'octopus_ai_auto_fetch_sitemap');
+
 /**
  * ✅ Verwerkt sitemap-upload of remote-URL en parseert URL's
  */
@@ -59,8 +60,11 @@ function octopus_ai_handle_sitemap_upload() {
         wp_die('⚠️ Geen URL’s gevonden. Controleer of het een geldige sitemap is.');
     }
 
-    update_option('octopus_ai_sitemap_urls', array_unique($all_urls));
-    wp_redirect(admin_url('admin.php?page=octopus-ai-chatbot&upload=sitemap&found=' . count($all_urls)));
+    // 🗃️ Genereer meteen chunks uit gevonden URL's
+    $parser = new \OctopusAI\Includes\SitemapParser();
+    $pages = $parser->fetchAndSaveHtmlFromUrls(0, array_unique($all_urls));
+
+    wp_redirect(admin_url('admin.php?page=octopus-ai-chatbot&upload=sitemap&found=' . count($all_urls) . '&pages=' . $pages));
     exit;
 }
 
@@ -84,15 +88,18 @@ function octopus_ai_auto_fetch_sitemap() {
     $sitemap_url = octopus_ai_find_sitemap_url($site_url);
     if (!$sitemap_url) {
         wp_die('Geen sitemap gevonden bij de opgegeven website.');
+
     }
 
     $upload_dir = wp_upload_dir();
     $upload_path = trailingslashit($upload_dir['basedir']) . 'octopus-chatbot/';
     if (!file_exists($upload_path)) wp_mkdir_p($upload_path);
 
+
     $response = wp_remote_get($sitemap_url);
     if (is_wp_error($response)) {
         wp_die('Kon sitemap niet ophalen.');
+
     }
 
     $content = wp_remote_retrieve_body($response);
@@ -110,11 +117,15 @@ function octopus_ai_auto_fetch_sitemap() {
     }
 
     update_option('octopus_ai_sitemap_url', $sitemap_url);
-    update_option('octopus_ai_sitemap_urls', array_unique($urls));
 
-    wp_redirect(admin_url('admin.php?page=octopus-ai-chatbot&upload=sitemap&found=' . count($urls)));
+    // 🗃️ Genereer meteen chunks
+    $parser = new \OctopusAI\Includes\SitemapParser();
+    $pages = $parser->fetchAndSaveHtmlFromUrls(0, $urls);
+
+    wp_redirect(admin_url('admin.php?page=octopus-ai-chatbot&upload=sitemap&found=' . count($urls) . '&pages=' . $pages));
     exit;
 }
+
 
 /**
  * ✅ Parse een sitemap of indexbestand (ook met sub-sitemaps)
@@ -139,8 +150,8 @@ function octopus_ai_parse_sitemap($source, &$visited = []) {
 
     $namespaces = $xml->getDocNamespaces(true);
     $root = $xml->getName();
-
     $urls = [];
+
     if ($root === 'urlset') {
         if (isset($namespaces[''])) {
             $xml->registerXPathNamespace('ns', $namespaces['']);
@@ -205,59 +216,7 @@ function octopus_ai_find_sitemap_url($site_url) {
     return '';
 }
 
-// ✅ Crawlen & chunks genereren uit sitemap-URLs
-add_action('admin_post_octopus_ai_crawl_sitemap', function () {
-    if (!current_user_can('manage_options') || !check_admin_referer('octopus_ai_crawl_sitemap')) {
-        wp_die('Beveiligingsfout bij crawlen.');
-    }
-
-    $upload_dir = wp_upload_dir();
-    $urls = get_option('octopus_ai_sitemap_urls', []);
-    $chunks_dir = trailingslashit($upload_dir['basedir']) . 'octopus-ai-chunks/';
-    if (!file_exists($chunks_dir)) wp_mkdir_p($chunks_dir);
-
-    $count = 0;
-
-    foreach ($urls as $url) {
-        if ($count >= 25) break; // Max 25 pagina's
-
-        $response = wp_remote_get($url);
-        if (is_wp_error($response)) continue;
-
-        $html = wp_remote_retrieve_body($response);
-        if (!$html) continue;
-
-        libxml_use_internal_errors(true);
-        $dom = new \DOMDocument();
-        @$dom->loadHTML($html);
-        libxml_clear_errors();
-
-        $xpath = new \DOMXPath($dom);
-        $mainNode = $xpath->query('//main')->item(0) ?? $xpath->query('//body')->item(0);
-        if (!$mainNode) continue;
-
-        $text = trim($mainNode->textContent);
-        if (strlen($text) < 50) continue;
-
-        $slug = sanitize_title(basename(parse_url($url, PHP_URL_PATH))) ?: 'pagina-' . $count;
-        file_put_contents($chunks_dir . 'sitemap_' . $slug . '.txt', $text);
-        $count++;
-    }
-
-    wp_redirect(admin_url('admin.php?page=octopus-ai-chatbot&crawl=done&pages=' . $count));
-    exit;
-});
-
-// ✅ Wissen van sitemap-URL lijst
-add_action('admin_post_octopus_ai_clear_sitemap_urls', function () {
-    if (!current_user_can('manage_options') || !check_admin_referer('octopus_ai_clear_sitemap_urls')) {
-        wp_die('Beveiligingsfout bij wissen.');
-    }
-
-    delete_option('octopus_ai_sitemap_urls');
-    wp_redirect(admin_url('admin.php?page=octopus-ai-chatbot&cleared=1'));
-    exit;
-});
+// (Crawl actie verwijderd: chunking gebeurt automatisch bij upload)
 
 // ✅ Verwijderen van individuele chunks
 add_action('admin_post_octopus_ai_delete_chunks', function () {
@@ -321,6 +280,11 @@ add_action('admin_post_octopus_ai_delete_sitemaps', function () {
             $safe_file = basename($file);
             $full_path = $sitemap_dir . $safe_file;
             if (file_exists($full_path)) {
+                $urls = octopus_ai_parse_sitemap($full_path);
+                if ($urls) {
+                    $parser = new \OctopusAI\Includes\SitemapParser();
+                    $parser->deleteChunksForUrls($urls);
+                }
                 unlink($full_path);
                 $deleted++;
             }
