@@ -77,11 +77,6 @@ function octopus_ai_handle_pdf_upload() {
     if (!file_exists($upload_path)) wp_mkdir_p($upload_path);
     if (!file_exists($chunks_dir)) wp_mkdir_p($chunks_dir);
 
-    // Verwijder oude chunks
-    foreach (glob($chunks_dir . '*.txt') as $old_chunk) {
-        unlink($old_chunk);
-    }
-
     $files = $_FILES['octopus_ai_pdf_upload'];
 
     foreach ($files['name'] as $index => $name) {
@@ -94,17 +89,24 @@ function octopus_ai_handle_pdf_upload() {
                 $chunker = new Chunker();
                 $chunks = $chunker->chunkPdfWithMetadata($filepath, $slug);
 
+                // verwijder bestaande chunks voor dit PDF-bestand
+                foreach (glob($chunks_dir . $slug . '_chunk_*.json') as $old) {
+                    unlink($old);
+                }
+
                 foreach ($chunks as $i => $chunk) {
                     $meta = $chunk['metadata'];
-                    $file = $chunks_dir . 'chunk_' . ($i + 1) . '.txt';
-
-                    $text = $chunk['content'] . PHP_EOL .
-                        '##source_title:' . $meta['source_title'] . PHP_EOL .
-                        '##page_slug:' . $meta['page_slug'] . PHP_EOL .
-                        '##original_page:' . $meta['original_page'] . PHP_EOL .
-                        '##section_title:' . $meta['section_title'];
-
-                    file_put_contents($file, $text);
+                    $file = $chunks_dir . $slug . '_chunk_' . ($i + 1) . '.json';
+                    $data = [
+                        'content'  => $chunk['content'],
+                        'metadata' => [
+                            'source_title' => $meta['source_title'] ?? '',
+                            'page_slug'     => $meta['page_slug'] ?? '',
+                            'original_page' => $meta['original_page'] ?? '',
+                            'section_title' => $meta['section_title'] ?? '',
+                        ],
+                    ];
+                    file_put_contents($file, wp_json_encode($data, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT));
                 }
             }
         }
@@ -127,9 +129,25 @@ function octopus_ai_handle_delete_file() {
     }
 
     $upload_dir = wp_upload_dir();
-    $file_path = trailingslashit($upload_dir['basedir']) . 'octopus-chatbot/' . basename($_GET['file']);
+    $safe_file = basename($_GET['file']);
+    $file_path = trailingslashit($upload_dir['basedir']) . 'octopus-chatbot/' . $safe_file;
+    $chunks_dir = trailingslashit($upload_dir['basedir']) . 'octopus-ai-chunks/';
 
     if (file_exists($file_path)) {
+        $ext = pathinfo($safe_file, PATHINFO_EXTENSION);
+        if ($ext === 'pdf') {
+            $slug = basename($safe_file, '.pdf');
+            foreach (glob($chunks_dir . $slug . '_chunk_*.json') as $chunk) {
+                unlink($chunk);
+            }
+        } elseif ($ext === 'xml') {
+            $urls = octopus_ai_parse_sitemap($file_path);
+            if ($urls) {
+                $parser = new \OctopusAI\Includes\SitemapParser();
+                $parser->deleteChunksForUrls($urls);
+            }
+        }
+
         unlink($file_path);
         wp_redirect(add_query_arg('delete', 'success', admin_url('admin.php?page=octopus-ai-chatbot')));
     } else {
@@ -152,12 +170,27 @@ function octopus_ai_handle_bulk_delete() {
     $files_to_delete = isset($_POST['octopus_ai_files']) ? (array) $_POST['octopus_ai_files'] : array();
     $upload_dir = wp_upload_dir();
     $upload_path = trailingslashit($upload_dir['basedir']) . 'octopus-chatbot/';
+    $chunks_dir = trailingslashit($upload_dir['basedir']) . 'octopus-ai-chunks/';
 
     $deleted_count = 0;
     foreach ($files_to_delete as $filename) {
         $safe_name = basename($filename);
         $file_path = $upload_path . $safe_name;
         if (file_exists($file_path)) {
+            $ext = pathinfo($safe_name, PATHINFO_EXTENSION);
+            if ($ext === 'pdf') {
+                $slug = basename($safe_name, '.pdf');
+                foreach (glob($chunks_dir . $slug . '_chunk_*.json') as $chunk) {
+                    unlink($chunk);
+                }
+            } elseif ($ext === 'xml') {
+                $urls = octopus_ai_parse_sitemap($file_path);
+                if ($urls) {
+                    $parser = new \OctopusAI\Includes\SitemapParser();
+                    $parser->deleteChunksForUrls($urls);
+                }
+            }
+
             unlink($file_path);
             $deleted_count++;
         }
@@ -312,6 +345,9 @@ function octopus_ai_settings_page() {
 
         <?php if (isset($_GET['upload']) && $_GET['upload'] === 'success'): ?>
             <div class="notice notice-success is-dismissible"><p>PDF's succesvol geüpload en verwerkt.</p></div>
+        <?php endif; ?>
+        <?php if (isset($_GET['upload']) && $_GET['upload'] === 'sitemap' && isset($_GET['found']) && isset($_GET['pages'])): ?>
+            <div class="notice notice-success is-dismissible"><p><?php echo intval($_GET['found']); ?> URL(s) gevonden en <?php echo intval($_GET['pages']); ?> pagina's gecrawld.</p></div>
         <?php endif; ?>
         <?php if (isset($_GET['delete']) && $_GET['delete'] === 'success'): ?>
             <div class="notice notice-success is-dismissible"><p>Bestand succesvol verwijderd.</p></div>
@@ -516,6 +552,13 @@ function octopus_ai_settings_page() {
         <input type="url" name="sitemap_url" value="<?php echo esc_attr(get_option('octopus_ai_sitemap_url', '')); ?>" style="width:400px;" placeholder="https://example.com/sitemap.xml" />
         <?php submit_button('💾 Sitemap opslaan'); ?>
     </form>
+
+    <form method="post" action="<?php echo admin_url('admin-post.php'); ?>" style="margin-top:15px;">
+        <?php wp_nonce_field('octopus_ai_auto_sitemap', 'octopus_ai_auto_sitemap_nonce'); ?>
+        <input type="hidden" name="action" value="octopus_ai_auto_fetch_sitemap">
+        <input type="url" name="octopus_ai_site_url" style="width:400px;" placeholder="https://example.com" required />
+        <?php submit_button('🔎 Zoek sitemap automatisch', 'secondary'); ?>
+    </form>
 </div>
 
 
@@ -531,8 +574,6 @@ if (file_exists($sitemap_path)) {
     echo '<p><strong>📄 Huidige sitemap:</strong> <a href="' . esc_url($upload_url . 'sitemap.xml') . '" target="_blank">Bekijk sitemap.xml</a></p>';
 }
 
-$sitemap_urls = get_option('octopus_ai_sitemap_urls', []);
-
 require_once plugin_dir_path(__FILE__) . '../includes/sitemap-parser.php';
 $parser = new \OctopusAI\Includes\SitemapParser();
 
@@ -546,13 +587,7 @@ if (isset($_GET['sitemap_debug'])) {
     echo '</ul>';
 }
 
-if (isset($_GET['crawl']) && $_GET['crawl'] === 'now') {
-    $count = $parser->fetchAndSaveHtmlFromUrls(0);
-    echo "<div class='updated'><p><strong>$count pagina's</strong> gecrawld en opgeslagen in chunks-folder.</p></div>";
-}
-
-echo '<p><a href="' . esc_url(add_query_arg('sitemap_debug', '1')) . '" class="button">🔍 Toon sitemap-URL’s</a> ';
-echo '<a href="' . esc_url(add_query_arg('crawl', 'now')) . '" class="button button-primary">🌐 Crawlen & opslaan</a></p>';
+echo '<p><a href="' . esc_url(add_query_arg('sitemap_debug', '1')) . '" class="button">🔍 Toon sitemap-URL’s</a></p>';
 ?>
 
 <hr>
@@ -609,7 +644,7 @@ if (isset($_GET['chunks_cleared'])) {
 }
 
 if (file_exists($chunk_dir)) {
-    $chunk_files = glob($chunk_dir . 'sitemap_*.txt');
+    $chunk_files = glob($chunk_dir . 'sitemap_*.json');
     if ($chunk_files): ?>
         <form method="post" action="<?php echo admin_url('admin-post.php'); ?>">
             <?php wp_nonce_field('octopus_ai_delete_chunks'); ?>
@@ -653,7 +688,7 @@ if (file_exists($chunk_dir)) {
 <script>
 document.addEventListener('DOMContentLoaded', function () {
     const url = new URL(window.location);
-    const paramsToRemove = ['upload', 'delete', 'bulk_delete', 'chunks_deleted', 'chunks_cleared', 'sitemap_debug', 'crawl'];
+    const paramsToRemove = ['upload', 'delete', 'bulk_delete', 'chunks_deleted', 'chunks_cleared', 'sitemap_debug', 'pages'];
 
     let shouldUpdate = false;
     for (const param of paramsToRemove) {
@@ -685,7 +720,7 @@ function toggleSection(header) {
             row.style.display = this.value === 'selected' ? '' : 'none';
         });
     </script>
-<?php if (isset($_GET['upload']) || isset($_GET['crawl']) || isset($_GET['sitemap_debug'])): ?>
+<?php if (isset($_GET['upload']) || isset($_GET['sitemap_debug'])): ?>
 <script>
     document.addEventListener('DOMContentLoaded', function () {
         const el = document.getElementById('sitemap-zone');
