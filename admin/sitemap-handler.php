@@ -78,6 +78,7 @@ function octopus_ai_auto_fetch_sitemap() {
         !wp_verify_nonce($_POST['octopus_ai_auto_sitemap_nonce'], 'octopus_ai_auto_sitemap')
     ) {
         wp_die('Beveiligingsfout bij automatische sitemap.');
+
     }
 
     $site_url = esc_url_raw(trim($_POST['octopus_ai_site_url'] ?? ''));
@@ -88,18 +89,15 @@ function octopus_ai_auto_fetch_sitemap() {
     $sitemap_url = octopus_ai_find_sitemap_url($site_url);
     if (!$sitemap_url) {
         wp_die('Geen sitemap gevonden bij de opgegeven website.');
-
     }
 
     $upload_dir = wp_upload_dir();
     $upload_path = trailingslashit($upload_dir['basedir']) . 'octopus-chatbot/';
     if (!file_exists($upload_path)) wp_mkdir_p($upload_path);
 
-
     $response = wp_remote_get($sitemap_url);
     if (is_wp_error($response)) {
         wp_die('Kon sitemap niet ophalen.');
-
     }
 
     $content = wp_remote_retrieve_body($response);
@@ -199,7 +197,10 @@ function octopus_ai_find_sitemap_url($site_url) {
                 }
             }
         }
+
     }
+    if (!$sitemap_xml) return [];
+
 
     // Fallback naar standaard locaties
     $candidates = [
@@ -253,7 +254,7 @@ add_action('admin_post_octopus_ai_clear_all_chunks', function () {
     $deleted = 0;
 
     if (file_exists($chunk_dir)) {
-        foreach (glob($chunk_dir . 'sitemap_*.txt') as $file) {
+        foreach (glob($chunk_dir . 'sitemap_*.json') as $file) {
             unlink($file);
             $deleted++;
         }

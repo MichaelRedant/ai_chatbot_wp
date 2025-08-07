@@ -50,6 +50,7 @@ class SitemapParser {
         $output_dir = trailingslashit($upload_dir['basedir']) . 'octopus-ai-chunks/';
         if (!file_exists($output_dir)) wp_mkdir_p($output_dir);
 
+
         if ($urls === null) {
             $urls = $this->getUrlsFromSitemap();
         }
@@ -78,9 +79,22 @@ class SitemapParser {
             if (strlen($text) < 50) continue;
 
             $slug = sanitize_title(basename(parse_url($url, PHP_URL_PATH))) ?: 'pagina-' . $count;
-            file_put_contents($output_dir . 'sitemap_' . $slug . '.txt', $text);
+            $data = [
+                'content'  => $text,
+                'metadata' => [
+                    'section_title' => '',
+                    'page_slug'     => $slug,
+                    'original_page' => '',
+                    'source_url'    => $url,
+                ],
+            ];
+            file_put_contents(
+                $output_dir . 'sitemap_' . $slug . '.json',
+                wp_json_encode($data, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT)
+            );
             $count++;
         }
+
 
         return $count;
     }
@@ -94,7 +108,9 @@ class SitemapParser {
 
         foreach ($urls as $index => $url) {
             $slug = sanitize_title(basename(parse_url($url, PHP_URL_PATH))) ?: 'pagina-' . $index;
-            $file = $chunk_dir . 'sitemap_' . $slug . '.txt';
+
+            $file = $chunk_dir . 'sitemap_' . $slug . '.json';
+
             if (file_exists($file)) {
                 unlink($file);
             }

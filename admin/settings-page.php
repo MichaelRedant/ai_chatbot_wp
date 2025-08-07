@@ -90,21 +90,27 @@ function octopus_ai_handle_pdf_upload() {
                 $chunks = $chunker->chunkPdfWithMetadata($filepath, $slug);
 
                 // verwijder bestaande chunks voor dit PDF-bestand
-                foreach (glob($chunks_dir . $slug . '_chunk_*.txt') as $old) {
+
+                foreach (glob($chunks_dir . $slug . '_chunk_*.json') as $old) {
+
                     unlink($old);
                 }
 
                 foreach ($chunks as $i => $chunk) {
                     $meta = $chunk['metadata'];
-                    $file = $chunks_dir . $slug . '_chunk_' . ($i + 1) . '.txt';
 
-                    $text = $chunk['content'] . PHP_EOL .
-                        '##source_title:' . $meta['source_title'] . PHP_EOL .
-                        '##page_slug:' . $meta['page_slug'] . PHP_EOL .
-                        '##original_page:' . $meta['original_page'] . PHP_EOL .
-                        '##section_title:' . $meta['section_title'];
+                    $file = $chunks_dir . $slug . '_chunk_' . ($i + 1) . '.json';
+                    $data = [
+                        'content'  => $chunk['content'],
+                        'metadata' => [
+                            'source_title' => $meta['source_title'] ?? '',
+                            'page_slug'     => $meta['page_slug'] ?? '',
+                            'original_page' => $meta['original_page'] ?? '',
+                            'section_title' => $meta['section_title'] ?? '',
+                        ],
+                    ];
+                    file_put_contents($file, wp_json_encode($data, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT));
 
-                    file_put_contents($file, $text);
                 }
             }
         }
@@ -135,7 +141,9 @@ function octopus_ai_handle_delete_file() {
         $ext = pathinfo($safe_file, PATHINFO_EXTENSION);
         if ($ext === 'pdf') {
             $slug = basename($safe_file, '.pdf');
-            foreach (glob($chunks_dir . $slug . '_chunk_*.txt') as $chunk) {
+
+            foreach (glob($chunks_dir . $slug . '_chunk_*.json') as $chunk) {
+
                 unlink($chunk);
             }
         } elseif ($ext === 'xml') {
@@ -178,7 +186,9 @@ function octopus_ai_handle_bulk_delete() {
             $ext = pathinfo($safe_name, PATHINFO_EXTENSION);
             if ($ext === 'pdf') {
                 $slug = basename($safe_name, '.pdf');
-                foreach (glob($chunks_dir . $slug . '_chunk_*.txt') as $chunk) {
+
+                foreach (glob($chunks_dir . $slug . '_chunk_*.json') as $chunk) {
+
                     unlink($chunk);
                 }
             } elseif ($ext === 'xml') {
@@ -644,7 +654,7 @@ if (isset($_GET['chunks_cleared'])) {
 }
 
 if (file_exists($chunk_dir)) {
-    $chunk_files = glob($chunk_dir . 'sitemap_*.txt');
+    $chunk_files = glob($chunk_dir . 'sitemap_*.json');
     if ($chunk_files): ?>
         <form method="post" action="<?php echo admin_url('admin-post.php'); ?>">
             <?php wp_nonce_field('octopus_ai_delete_chunks'); ?>
