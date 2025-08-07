@@ -62,12 +62,16 @@ function octopus_ai_chatbot_callback($request)
         error_log('[Octopus AI] Gedetecteerde intent: ' . $intent);
     }
 
-    // ✅ Detecteer taal op basis van URL
-$lang = 'NL';
-if (isset($_SERVER['REQUEST_URI']) && strpos($_SERVER['REQUEST_URI'], '/fr/') !== false) {
-    $lang = 'FR';
-}
+   // ✅ Detecteer taal op basis van URL of browserinstellingen
+    $lang         = 'NL';
+    $request_uri  = $_SERVER['REQUEST_URI'] ?? '';
+    $lang_header  = strtolower($_SERVER['HTTP_ACCEPT_LANGUAGE'] ?? '');
 
+    if (preg_match('#/fr(/|$)#', $request_uri)) {
+        $lang = 'FR';
+    } elseif (strpos($lang_header, 'fr') === 0) {
+        $lang = 'FR';
+    }
 
     $api_key = get_option('octopus_ai_api_key');
     if ($lang === 'FR') {

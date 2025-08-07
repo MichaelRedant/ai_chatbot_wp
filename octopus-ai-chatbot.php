@@ -51,9 +51,9 @@ function octopus_ai_enqueue_frontend_assets() {
     wp_enqueue_style('octopus-ai-chatbot-style', plugin_dir_url(__FILE__) . 'assets/css/chatbot.css', array(), '1.0');
     wp_enqueue_script('octopus-ai-chatbot-script', plugin_dir_url(__FILE__) . 'assets/js/chatbot.js', array('jquery'), '1.0', true);
 
-    $is_french = preg_match('#^/fr(/|$)#', $_SERVER['REQUEST_URI']);
-
-    $lang_code = $is_french ? 'FR' : ( substr($_SERVER['HTTP_ACCEPT_LANGUAGE'] ?? '', 0, 2) === 'fr' ? 'FR' : 'NL' );
+    $is_french  = preg_match('#^/fr(/|$)#', $_SERVER['REQUEST_URI']);
+    $lang_header = strtolower($_SERVER['HTTP_ACCEPT_LANGUAGE'] ?? '');
+    $lang_code  = ($is_french || strpos($lang_header, 'fr') === 0) ? 'FR' : 'NL';
 
 
     wp_localize_script('octopus-ai-chatbot-script', 'octopus_ai_chatbot_vars', array(
