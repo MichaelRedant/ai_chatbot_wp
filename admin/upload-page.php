@@ -37,11 +37,14 @@ function octopus_ai_pdf_upload_page() {
                 }
 
                 $slug = basename($file_path, '.pdf');
+
                 foreach (glob($chunks_dir . $slug . '_chunk_*.json') as $old) {
+
                     unlink($old);
                 }
 
                 foreach ($chunks as $index => $chunk) {
+
                     $chunk_file = $chunks_dir . $slug . '_chunk_' . $index . '.json';
                     $data = [
                         'content'  => $chunk,
@@ -53,6 +56,7 @@ function octopus_ai_pdf_upload_page() {
                         ],
                     ];
                     file_put_contents($chunk_file, wp_json_encode($data, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT));
+
                 }
 
                 echo '<div class="updated"><p>Upload en parsing gelukt. Chunks opgeslagen in: ' . esc_html($chunks_dir) . '</p></div>';
