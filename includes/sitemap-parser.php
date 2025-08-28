@@ -53,11 +53,21 @@ class SitemapParser {
     foreach ($urls as $url) {
         if ($limit > 0 && $count >= $limit) break; // enkel als limiet > 0
 
-        $response = wp_remote_get($url);
+        // Gebruik een browser-like user agent zodat servers geen 403 of 404 teruggeven
+        $response = wp_remote_get($url, [
+            'headers' => [
+                'User-Agent' => 'Mozilla/5.0 (compatible; OctopusAI/1.0)'
+            ],
+            'timeout' => 20,
+        ]);
         if (is_wp_error($response)) continue;
 
+        // ❌ Skip pagina's die geen 200 OK teruggeven
+        $code = wp_remote_retrieve_response_code($response);
+        if ($code !== 200) continue;
+
         $html = wp_remote_retrieve_body($response);
-        if (!$html) continue;
+        if (!$html || stripos($html, 'Not Found') !== false) continue;
 
         libxml_use_internal_errors(true);
         $dom = new \DOMDocument();

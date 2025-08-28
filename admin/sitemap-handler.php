@@ -41,10 +41,15 @@ function octopus_ai_handle_sitemap_upload() {
     // 🌐 Optioneel: URL invoer
     if (!empty($_POST['octopus_ai_sitemap_url'])) {
         $remote_url = esc_url_raw(trim($_POST['octopus_ai_sitemap_url']));
-        $response = wp_remote_get($remote_url);
-        if (!is_wp_error($response)) {
+        $response = wp_remote_get($remote_url, [
+            'headers' => [
+                'User-Agent' => 'Mozilla/5.0 (compatible; OctopusAI/1.0)'
+            ],
+            'timeout' => 20,
+        ]);
+        if (!is_wp_error($response) && wp_remote_retrieve_response_code($response) === 200) {
             $content = wp_remote_retrieve_body($response);
-            if ($content) {
+            if ($content && stripos($content, 'Not Found') === false) {
                 $filename = 'remote_' . md5($remote_url) . '.xml';
                 $destination = $upload_path . $filename;
                 file_put_contents($destination, $content);
@@ -107,11 +112,18 @@ add_action('admin_post_octopus_ai_crawl_sitemap', function () {
     foreach ($urls as $url) {
         if ($count >= 25) break; // Max 25 pagina's
 
-        $response = wp_remote_get($url);
+        $response = wp_remote_get($url, [
+            'headers' => [
+                'User-Agent' => 'Mozilla/5.0 (compatible; OctopusAI/1.0)'
+            ],
+            'timeout' => 20,
+        ]);
         if (is_wp_error($response)) continue;
 
+        if (wp_remote_retrieve_response_code($response) !== 200) continue;
+
         $html = wp_remote_retrieve_body($response);
-        if (!$html) continue;
+        if (!$html || stripos($html, 'Not Found') !== false) continue;
 
         libxml_use_internal_errors(true);
         $dom = new \DOMDocument();
