@@ -21,6 +21,7 @@
     cursor: pointer;
     z-index: 9999;
     transition: transform 0.2s ease;
+    animation: pulse 4s ease-in-out infinite;
 }
 
 #octopus-chat-toggle:hover {
@@ -30,6 +31,31 @@
 #octopus-chat-toggle img {
     width: 40px;
     height: 40px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    #octopus-chat-toggle {
+        animation: none;
+    }
+}
+
+#octopus-chat-toggle.pop-highlight {
+    animation: pop 0.3s ease-out, pulse 4s ease-in-out infinite;
+}
+
+#octopus-chat-toggle.pop-highlight::after {
+    content: '';
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 80px;
+    height: 80px;
+    transform: translate(-50%, -50%) scale(1);
+    border: 2px solid var(--primary-color);
+    border-radius: 50%;
+    opacity: 0;
+    animation: popLines 0.6s ease-out;
+    pointer-events: none;
 }
 
 /* ==========================================================================
@@ -352,6 +378,17 @@
     0%   { transform: scale(1); }
     50%  { transform: scale(1.05); }
     100% { transform: scale(1); }
+}
+
+@keyframes pop {
+    0%   { transform: scale(1); }
+    50%  { transform: scale(1.2); }
+    100% { transform: scale(1); }
+}
+
+@keyframes popLines {
+    0%   { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+    100% { opacity: 0; transform: translate(-50%, -50%) scale(1.6); }
 }
 
 
