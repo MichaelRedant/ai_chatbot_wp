@@ -60,13 +60,8 @@ class SitemapParser {
         foreach ($urls as $url) {
             if ($limit > 0 && $count >= $limit) break; // enkel als limiet > 0
 
-            $response = wp_remote_get($url);
-            if (is_wp_error($response)) continue;
+            list($html, $final_url) = $this->retrieveHtmlWithLangFallback($url);
 
-            $code = wp_remote_retrieve_response_code($response);
-            if ($code !== 200) continue;
-
-            $html = wp_remote_retrieve_body($response);
             if (!$html) continue;
 
             libxml_use_internal_errors(true);
@@ -87,21 +82,30 @@ class SitemapParser {
 
             $titleNode = $xpath->query('//main//h1 | //body//h1 | //title')->item(0);
             $section_title = $titleNode ? trim($titleNode->textContent) : '';
-            if (stripos($section_title, '404') !== false || stripos($section_title, 'Not Found') !== false) {
+
+
+            $text = trim(preg_replace('/\s+/', ' ', $mainNode->textContent));
+
+            if (
+                stripos($section_title, '404') !== false ||
+                stripos($section_title, 'Not Found') !== false ||
+                stripos($text, 'Not Found') !== false ||
+                stripos($text, 'requested URL was not found') !== false
+            ) {
                 continue;
             }
 
-            $text = trim(preg_replace('/\s+/', ' ', $mainNode->textContent));
+
             if (strlen($text) < 50) continue;
 
-            $slug = sanitize_title(basename(parse_url($url, PHP_URL_PATH))) ?: 'pagina-' . $count;
+            $slug = sanitize_title(basename(parse_url($final_url, PHP_URL_PATH))) ?: 'pagina-' . $count;
             $data = [
                 'content'  => $text,
                 'metadata' => [
                     'section_title' => $section_title,
                     'page_slug'     => $slug,
                     'original_page' => '',
-                    'source_url'    => $url,
+                    'source_url'    => $final_url,
                 ],
             ];
             file_put_contents(
@@ -113,6 +117,34 @@ class SitemapParser {
 
 
         return $count;
+    }
+
+    /**
+     * 🔄 Probeer URL op te halen met NL/FR fallback indien nodig
+     */
+    private function retrieveHtmlWithLangFallback($url) {
+        $candidates = [$url];
+
+        if (strpos($url, '/manual/') !== false && !preg_match('/\/manual\/(NL|FR)\//', $url)) {
+            $candidates[] = preg_replace('/\/manual\//', '/manual/NL/', $url, 1);
+            $candidates[] = preg_replace('/\/manual\//', '/manual/FR/', $url, 1);
+        }
+
+        foreach ($candidates as $candidate) {
+            $response = wp_remote_get($candidate);
+            if (is_wp_error($response)) continue;
+            if (wp_remote_retrieve_response_code($response) !== 200) continue;
+
+            $html = wp_remote_retrieve_body($response);
+            if (!$html) continue;
+            if (stripos($html, 'Not Found') !== false || stripos($html, 'requested URL was not found') !== false) {
+                continue;
+            }
+
+            return [$html, $candidate];
+        }
+
+        return [null, null];
     }
 
     /**

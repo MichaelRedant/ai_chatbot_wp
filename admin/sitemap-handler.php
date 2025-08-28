@@ -109,7 +109,7 @@ function octopus_ai_auto_fetch_sitemap() {
     $destination = $upload_path . $filename;
     file_put_contents($destination, $content);
 
-    $urls = octopus_ai_parse_sitemap($destination);
+    $urls = array_unique(octopus_ai_parse_sitemap($destination));
     if (empty($urls)) {
         wp_die('Geen URL\'s gevonden in de sitemap.');
     }
