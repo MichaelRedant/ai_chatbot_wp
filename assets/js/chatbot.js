@@ -10,6 +10,17 @@ document.addEventListener('DOMContentLoaded', function () {
     chatbot.id = 'octopus-chatbot';
     document.body.appendChild(chatbot);
 
+    const path = window.location.pathname;
+    const isHome = path === '/' || path === '/index.php' || path === '/fr/';
+    if (isHome) {
+        setTimeout(() => {
+            if (!window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+                toggleButton.classList.add('pop-highlight');
+                setTimeout(() => toggleButton.classList.remove('pop-highlight'), 800);
+            }
+        }, 2000);
+    }
+
     const settings = octopus_ai_chatbot_vars;
 const fallbackTrigger = settings.i18n.fallback_trigger || "Sorry, daar kan ik je niet mee helpen.";
 
