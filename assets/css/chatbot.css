@@ -21,6 +21,7 @@
     cursor: pointer;
     z-index: 9999;
     transition: transform 0.2s ease;
+    animation: pulse 4s ease-in-out infinite;
 }
 
 #octopus-chat-toggle:hover {
@@ -30,6 +31,12 @@
 #octopus-chat-toggle img {
     width: 40px;
     height: 40px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    #octopus-chat-toggle {
+        animation: none;
+    }
 }
 
 /* ==========================================================================
