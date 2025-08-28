@@ -63,6 +63,9 @@ class SitemapParser {
             $response = wp_remote_get($url);
             if (is_wp_error($response)) continue;
 
+            $code = wp_remote_retrieve_response_code($response);
+            if ($code !== 200) continue;
+
             $html = wp_remote_retrieve_body($response);
             if (!$html) continue;
 
@@ -71,18 +74,31 @@ class SitemapParser {
             @$dom->loadHTML($html);
             libxml_clear_errors();
 
+            // verwijder overbodige tags
+            foreach (['script', 'style', 'noscript'] as $tag) {
+                foreach ($dom->getElementsByTagName($tag) as $node) {
+                    $node->parentNode->removeChild($node);
+                }
+            }
+
             $xpath = new \DOMXPath($dom);
             $mainNode = $xpath->query('//main')->item(0) ?? $xpath->query('//body')->item(0);
             if (!$mainNode) continue;
 
-            $text = trim($mainNode->textContent);
+            $titleNode = $xpath->query('//main//h1 | //body//h1 | //title')->item(0);
+            $section_title = $titleNode ? trim($titleNode->textContent) : '';
+            if (stripos($section_title, '404') !== false || stripos($section_title, 'Not Found') !== false) {
+                continue;
+            }
+
+            $text = trim(preg_replace('/\s+/', ' ', $mainNode->textContent));
             if (strlen($text) < 50) continue;
 
             $slug = sanitize_title(basename(parse_url($url, PHP_URL_PATH))) ?: 'pagina-' . $count;
             $data = [
                 'content'  => $text,
                 'metadata' => [
-                    'section_title' => '',
+                    'section_title' => $section_title,
                     'page_slug'     => $slug,
                     'original_page' => '',
                     'source_url'    => $url,
