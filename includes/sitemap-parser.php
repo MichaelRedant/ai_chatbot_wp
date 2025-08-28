@@ -61,6 +61,7 @@ class SitemapParser {
             if ($limit > 0 && $count >= $limit) break; // enkel als limiet > 0
 
             list($html, $final_url) = $this->retrieveHtmlWithLangFallback($url);
+
             if (!$html) continue;
 
             libxml_use_internal_errors(true);
@@ -82,6 +83,7 @@ class SitemapParser {
             $titleNode = $xpath->query('//main//h1 | //body//h1 | //title')->item(0);
             $section_title = $titleNode ? trim($titleNode->textContent) : '';
 
+
             $text = trim(preg_replace('/\s+/', ' ', $mainNode->textContent));
 
             if (
@@ -92,6 +94,7 @@ class SitemapParser {
             ) {
                 continue;
             }
+
 
             if (strlen($text) < 50) continue;
 
