@@ -423,14 +423,12 @@
     }
 
     #octopus-chatbot {
-        bottom: 0;
-        right: 0;
-        left: 0;
-        width: 100%;
-        max-height: 100%;
-        border-radius: 0;
-        border-left: none;
-        border-right: none;
+        bottom: 16px;
+        left: 5%;
+        right: 5%;
+        width: 90%;
+        max-height: 80vh;
+        border-radius: 12px;
         box-shadow: 0 -2px 10px rgba(0, 0, 0, 0.2);
     }
 
