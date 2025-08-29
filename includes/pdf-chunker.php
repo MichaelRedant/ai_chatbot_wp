@@ -25,9 +25,10 @@ class Chunker
      *
      * @param string $filePath Volledig pad naar het PDF-bestand.
      * @param string $sourceId Slug of bestandsnaam zonder extensie.
+     * @param string $fileUrl Publieke URL naar het PDF-bestand.
      * @return array
      */
-    public function chunkPdfWithMetadata(string $filePath, string $sourceId): array
+    public function chunkPdfWithMetadata(string $filePath, string $sourceId, string $fileUrl): array
     {
         $parser = new Parser();
         $pdf = $parser->parseFile($filePath);
@@ -47,12 +48,13 @@ class Chunker
             $splitChunks = $this->splitTextIntoChunks($text, $this->chunkSize);
             foreach ($splitChunks as $chunkText) {
                 $chunks[] = [
-                    'content' => $chunkText,
+                    'content'  => $chunkText,
                     'metadata' => [
-                        'page_slug' => $pageSlug,
-                        'source_title' => $sourceTitle,
+                        'page_slug'     => $pageSlug,
+                        'source_title'  => $sourceTitle,
                         'original_page' => $pageNumber,
                         'section_title' => $sectionTitle,
+                        'source_url'    => $fileUrl . '#page=' . $pageNumber,
                     ],
                 ];
             }
