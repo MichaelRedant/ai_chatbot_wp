@@ -26,6 +26,7 @@
 
 #octopus-chat-toggle:hover {
     transform: translateY(-3px);
+    animation: hoverPulse 0.6s ease;
 }
 
 #octopus-chat-toggle img {
@@ -37,6 +38,11 @@
     #octopus-chat-toggle {
         animation: none;
     }
+
+    #octopus-chat-toggle:hover {
+        animation: none;
+    }
+
 }
 
 #octopus-chat-toggle.pop-highlight {
@@ -379,6 +385,13 @@
     50%  { transform: scale(1.05); }
     100% { transform: scale(1); }
 }
+
+@keyframes hoverPulse {
+    0%   { transform: translateY(-3px) scale(1); }
+    50%  { transform: translateY(-3px) scale(1.06); }
+    100% { transform: translateY(-3px) scale(1); }
+}
+
 
 @keyframes pop {
     0%   { transform: scale(1); }
