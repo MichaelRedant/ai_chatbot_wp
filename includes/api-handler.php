@@ -235,21 +235,25 @@ $fallback_text = $fallback . "\n\n[$link_text]($zoeklink)";
     $body_json = wp_remote_retrieve_body($response);
     $body = json_decode($body_json, true);
     // 🧠 AI-antwoord verwerken
-$answer = $body['choices'][0]['message']['content'] ?? '';
+    $answer = $body['choices'][0]['message']['content'] ?? '';
 
-if (!$answer) {
-    $error_message = $body['error']['message'] ?? 'Ongeldige API-respons.';
-    return new WP_Error('api_error', 'Fout van OpenAI: ' . $error_message);
-}
+    if (!$answer) {
+        $error_message = $body['error']['message'] ?? 'Ongeldige API-respons.';
+        return new WP_Error('api_error', 'Fout van OpenAI: ' . $error_message);
+    }
 
-// ✅ Unicode-decoding voor uXXXX of \uXXXX (zoals u00e9 → é)
+    // ✅ Unicode-decodering via JSON (zoals \u00e9 → é)
+    $decoded_json = json_decode('"' . addcslashes($answer, "\\\"\/\n\r\t") . '"');
+    if (is_string($decoded_json)) {
+        $answer = $decoded_json;
+    }
 
-$answer = preg_replace_callback('/\\\\?u([0-9a-fA-F]{4})/', function ($matches) {
-
-    $hex = $matches[1];
-    $bin = pack('H*', $hex);
-    return mb_convert_encoding($bin, 'UTF-8', 'UTF-16BE');
-}, $answer);
+    // ✅ Unicode-decoding voor uXXXX of \uXXXX (fallback)
+    $answer = preg_replace_callback('/\\\\?u([0-9a-fA-F]{4})/', function ($matches) {
+        $hex = $matches[1];
+        $bin = pack('H*', $hex);
+        return mb_convert_encoding($bin, 'UTF-8', 'UTF-16BE');
+    }, $answer);
 
 // ✅ Eén keer UTF-8 normaliseren
 $answer = mb_convert_encoding($answer, 'UTF-8', 'UTF-8');
