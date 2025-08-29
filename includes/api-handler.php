@@ -168,21 +168,23 @@ if (function_exists('octopus_ai_retrieve_relevant_chunks')) {
     }
 }
 
-// ❌ Als er geen relevante context gevonden werd, geef direct fallback met zoeklink terug
+// ❌ Als er geen relevante context gevonden werd, geef direct fallback terug
+// De zoeklinkfunctie wordt tijdelijk uitgeschakeld om te focussen op directe handleidingslinks
 if (!$relevantFound) {
-    if (!function_exists('octopus_ai_extract_keyword')) {
-        require_once plugin_dir_path(__FILE__) . 'helpers/extract-keyword.php';
-    }
+    // if (!function_exists('octopus_ai_extract_keyword')) {
+    //     require_once plugin_dir_path(__FILE__) . 'helpers/extract-keyword.php';
+    // }
 
-    $keyword = octopus_ai_extract_keyword($message);
-    $zoeklink = "https://login.octopus.be/manual/{$lang}/hmftsearch.htm?zoom_query=" . rawurlencode($keyword);
+    // $keyword = octopus_ai_extract_keyword($message);
+    // $zoeklink = "https://login.octopus.be/manual/{$lang}/hmftsearch.htm?zoom_query=" . rawurlencode($keyword);
 
-$link_text = ($lang === 'FR')
-    ? 'Voir aussi dans la documentation'
-    : 'Bekijk mogelijke info in de handleiding';
+    // $link_text = ($lang === 'FR')
+    //     ? 'Voir aussi dans la documentation'
+    //     : 'Bekijk mogelijke info in de handleiding';
 
-$fallback_text = $fallback . "\n\n[$link_text]($zoeklink)";    
-    return $fallback_text; // ← GEEN do_shortcode()
+    // $fallback_text = $fallback . "\n\n[$link_text]($zoeklink)";
+    // return $fallback_text; // ← GEEN do_shortcode()
+    return $fallback;
 }
 
 
@@ -199,7 +201,6 @@ $fallback_text = $fallback . "\n\n[$link_text]($zoeklink)";
             $title = sanitize_text_field($meta['section_title'] ?? '');
             $slug  = sanitize_text_field($meta['page_slug'] ?? '');
             $url   = esc_url_raw($meta['source_url'] ?? '');
-
 
             if ($title && $url && octopus_ai_is_valid_url($url)) {
                 $is_manual = strpos($url, 'octopus.be/manual') !== false;
@@ -318,33 +319,34 @@ if ($primary_doc_url && strpos($answer, $primary_doc_url) === false) {
         $label = ($lang === 'FR') ? 'Voir dans le manuel' : 'Bekijk dit in de handleiding';
     } else {
         $label = ($lang === 'FR') ? 'Voir sur le site' : 'Bekijk dit op de website';
+
     }
     $answer .= "\n\n[$label]($primary_doc_url)";
 }
 
-// ✅ Fallback-zoeklink als geen geldige link gevonden is
-if (
-    !$validLinkFound &&
-    (
-        trim($answer) === trim($fallback) ||
-        !preg_match('/https:\/\/login\.octopus\.be\/manual\/(NL|FR)\//', $answer)
-    )
-) {
-    if (!function_exists('octopus_ai_extract_keyword')) {
-        require_once plugin_dir_path(__FILE__) . 'helpers/extract-keyword.php';
-    }
-    $keyword = octopus_ai_extract_keyword($message);
-    if ($keyword) {
-        $zoeklink = "https://login.octopus.be/manual/{$lang}/hmftsearch.htm?zoom_query=" . rawurlencode($keyword);
+// ✅ Fallback-zoeklink als geen geldige link gevonden is (tijdelijk uitgeschakeld)
+// if (
+//     !$validLinkFound &&
+//     (
+//         trim($answer) === trim($fallback) ||
+//         !preg_match('/https:\/\/login\.octopus\.be\/manual\/(NL|FR)\//', $answer)
+//     )
+// ) {
+//     if (!function_exists('octopus_ai_extract_keyword')) {
+//         require_once plugin_dir_path(__FILE__) . 'helpers/extract-keyword.php';
+//     }
+//     $keyword = octopus_ai_extract_keyword($message);
+//     if ($keyword) {
+//         $zoeklink = "https://login.octopus.be/manual/{$lang}/hmftsearch.htm?zoom_query=" . rawurlencode($keyword);
 
-        if (empty(trim($answer))) {
-            $answer = $fallback;
-        }
+//         if (empty(trim($answer))) {
+//             $answer = $fallback;
+//         }
 
-        $label = ($lang === 'FR') ? 'Voir aussi dans la documentation' : 'Bekijk mogelijke info in de handleiding';
-        $answer .= "\n\n[$label]($zoeklink)";
-    }
-}
+//         $label = ($lang === 'FR') ? 'Voir aussi dans la documentation' : 'Bekijk mogelijke info in de handleiding';
+//         $answer .= "\n\n[$label]($zoeklink)";
+//     }
+// }
 
 if (!function_exists('octopus_ai_log_interaction')) {
     require_once plugin_dir_path(__FILE__) . 'includes/logger.php';
