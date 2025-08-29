@@ -202,25 +202,33 @@ if (!$relevantFound) {
             $slug  = sanitize_text_field($meta['page_slug'] ?? '');
             $url   = esc_url_raw($meta['source_url'] ?? '');
 
+            // Geef voorkeur aan handleidinglink via page_slug
+            if ($title && $slug) {
+                $doc_url = "https://login.octopus.be/manual/{$lang}/{$slug}";
+                if (octopus_ai_is_valid_url($doc_url)) {
+                    $label = ($lang === 'FR') ? 'Voir dans le manuel' : 'Bekijk dit in de handleiding';
+                    $system_prompt .= "- *{$title}*\n  [{$label}]({$doc_url})\n";
+                    if (!$validLinkFound) {
+                        $primary_doc_url = $doc_url;
+                    }
+                    $validLinkFound = true;
+                    continue;
+                }
+            }
+
+            // Valt terug op de bron-URL indien beschikbaar
             if ($title && $url && octopus_ai_is_valid_url($url)) {
                 $is_manual = strpos($url, 'octopus.be/manual') !== false;
-                $label = $is_manual ? 'Bekijk dit in de handleiding' : 'Bekijk dit op de website';
+                if ($is_manual) {
+                    $label = ($lang === 'FR') ? 'Voir dans le manuel' : 'Bekijk dit in de handleiding';
+                } else {
+                    $label = ($lang === 'FR') ? 'Voir sur le site' : 'Bekijk dit op de website';
+                }
                 $system_prompt .= "- *{$title}*\n  [{$label}]({$url})\n";
                 if (!$validLinkFound) {
                     $primary_doc_url = $url;
                 }
                 $validLinkFound = true;
-            } elseif ($title && $slug) {
-
-                $doc_url = "https://login.octopus.be/manual/{$lang}/{$slug}";
-                if (octopus_ai_is_valid_url($doc_url)) {
-                    $system_prompt .= "- *{$title}*\n  [Bekijk dit in de handleiding]({$doc_url})\n";
-                    if (!$validLinkFound) {
-                        $primary_doc_url = $doc_url;
-                    }
-                    $validLinkFound = true;
-                }
-
             }
         }
     }
