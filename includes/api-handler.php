@@ -34,7 +34,15 @@ function octopus_ai_is_valid_url($url) {
     if (!is_null($cached)) return $cached;
 
     $headers = @get_headers($url);
-    $is_valid = $headers && strpos($headers[0], '200') !== false;
+    $is_valid = false;
+
+    if ($headers && isset($headers[0])) {
+        if (preg_match('/^HTTP\/[^\s]+\s+(\d+)/', $headers[0], $matches)) {
+            $status = (int) $matches[1];
+            // Beschouw 200-399 of 403 als geldig (sommige handleidinglinks vereisen login)
+            $is_valid = ($status >= 200 && $status < 400) || $status === 403;
+        }
+    }
 
     set_transient($cache_key, $is_valid, 12 * HOUR_IN_SECONDS);
     return $is_valid;
@@ -192,7 +200,17 @@ $fallback_text = $fallback . "\n\n[$link_text]($zoeklink)";
             $slug  = sanitize_text_field($meta['page_slug'] ?? '');
             $url   = esc_url_raw($meta['source_url'] ?? '');
 
-            if ($title && $slug) {
+
+            if ($title && $url && octopus_ai_is_valid_url($url)) {
+                $is_manual = strpos($url, 'octopus.be/manual') !== false;
+                $label = $is_manual ? 'Bekijk dit in de handleiding' : 'Bekijk dit op de website';
+                $system_prompt .= "- *{$title}*\n  [{$label}]({$url})\n";
+                if (!$validLinkFound) {
+                    $primary_doc_url = $url;
+                }
+                $validLinkFound = true;
+            } elseif ($title && $slug) {
+
                 $doc_url = "https://login.octopus.be/manual/{$lang}/{$slug}";
                 if (octopus_ai_is_valid_url($doc_url)) {
                     $system_prompt .= "- *{$title}*\n  [Bekijk dit in de handleiding]({$doc_url})\n";
@@ -201,12 +219,7 @@ $fallback_text = $fallback . "\n\n[$link_text]($zoeklink)";
                     }
                     $validLinkFound = true;
                 }
-            } elseif ($title && $url) {
-                $system_prompt .= "- *{$title}*\n  [Bekijk dit op de website]({$url})\n";
-                if (!$validLinkFound) {
-                    $primary_doc_url = $url;
-                }
-                $validLinkFound = true;
+
             }
         }
     }
