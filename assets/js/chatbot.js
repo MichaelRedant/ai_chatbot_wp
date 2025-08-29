@@ -41,7 +41,9 @@ if (!lang || lang === '') {
     chatbot.innerHTML = `
         <div id="chat-header" style="background-color:${settings.primary_color};">
             <div class="chat-header-inner">
-                <img src="${settings.logo_url}" alt="Logo" class="chat-logo" style="height: 24px; max-width: 28px; margin-right: 10px;">
+                <div class="chat-logo-glass">
+                    <img src="${settings.logo_url}" alt="Logo" class="chat-logo">
+                </div>
                 <span class="chat-header-title">${settings.brand_name || 'AI Chatbot'}</span>
             </div>
             <button id="chat-close" aria-label="Sluiten" class="chat-close-button">&times;</button>
