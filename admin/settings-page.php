@@ -87,7 +87,8 @@ function octopus_ai_handle_pdf_upload() {
             if (move_uploaded_file($files['tmp_name'][$index], $filepath)) {
                 $slug = basename($filename, '.pdf');
                 $chunker = new Chunker();
-                $chunks = $chunker->chunkPdfWithMetadata($filepath, $slug);
+                $file_url = trailingslashit($upload_dir['baseurl']) . 'octopus-chatbot/' . $filename;
+                $chunks = $chunker->chunkPdfWithMetadata($filepath, $slug, $file_url);
 
                 // verwijder bestaande chunks voor dit PDF-bestand
 
@@ -107,6 +108,7 @@ function octopus_ai_handle_pdf_upload() {
                             'page_slug'     => $meta['page_slug'] ?? '',
                             'original_page' => $meta['original_page'] ?? '',
                             'section_title' => $meta['section_title'] ?? '',
+                            'source_url'    => $meta['source_url'] ?? '',
                         ],
                     ];
                     file_put_contents($file, wp_json_encode($data, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT));

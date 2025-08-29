@@ -34,7 +34,15 @@ function octopus_ai_is_valid_url($url) {
     if (!is_null($cached)) return $cached;
 
     $headers = @get_headers($url);
-    $is_valid = $headers && strpos($headers[0], '200') !== false;
+    $is_valid = false;
+
+    if ($headers && isset($headers[0])) {
+        if (preg_match('/^HTTP\/[^\s]+\s+(\d+)/', $headers[0], $matches)) {
+            $status = (int) $matches[1];
+            // Beschouw 200-399 of 403 als geldig (sommige handleidinglinks vereisen login)
+            $is_valid = ($status >= 200 && $status < 400) || $status === 403;
+        }
+    }
 
     set_transient($cache_key, $is_valid, 12 * HOUR_IN_SECONDS);
     return $is_valid;
@@ -160,21 +168,23 @@ if (function_exists('octopus_ai_retrieve_relevant_chunks')) {
     }
 }
 
-// ❌ Als er geen relevante context gevonden werd, geef direct fallback met zoeklink terug
+// ❌ Als er geen relevante context gevonden werd, geef direct fallback terug
+// De zoeklinkfunctie wordt tijdelijk uitgeschakeld om te focussen op directe handleidingslinks
 if (!$relevantFound) {
-    if (!function_exists('octopus_ai_extract_keyword')) {
-        require_once plugin_dir_path(__FILE__) . 'helpers/extract-keyword.php';
-    }
+    // if (!function_exists('octopus_ai_extract_keyword')) {
+    //     require_once plugin_dir_path(__FILE__) . 'helpers/extract-keyword.php';
+    // }
 
-    $keyword = octopus_ai_extract_keyword($message);
-    $zoeklink = "https://login.octopus.be/manual/{$lang}/hmftsearch.htm?zoom_query=" . rawurlencode($keyword);
+    // $keyword = octopus_ai_extract_keyword($message);
+    // $zoeklink = "https://login.octopus.be/manual/{$lang}/hmftsearch.htm?zoom_query=" . rawurlencode($keyword);
 
-$link_text = ($lang === 'FR')
-    ? 'Voir aussi dans la documentation'
-    : 'Bekijk mogelijke info in de handleiding';
+    // $link_text = ($lang === 'FR')
+    //     ? 'Voir aussi dans la documentation'
+    //     : 'Bekijk mogelijke info in de handleiding';
 
-$fallback_text = $fallback . "\n\n[$link_text]($zoeklink)";    
-    return $fallback_text; // ← GEEN do_shortcode()
+    // $fallback_text = $fallback . "\n\n[$link_text]($zoeklink)";
+    // return $fallback_text; // ← GEEN do_shortcode()
+    return $fallback;
 }
 
 
@@ -183,7 +193,8 @@ $fallback_text = $fallback . "\n\n[$link_text]($zoeklink)";
     $system_prompt .= "\n\nOpmerking:\nAls de gebruiker bevestigt dat hij verder geholpen wil worden (bijv. zegt 'ja'), geef dan een inhoudelijk vervolg op het onderwerp, niet een algemene begroeting of herstart.";
 
     // 📄 Links toevoegen
-    $validLinkFound = false;
+    $validLinkFound  = false;
+    $primary_doc_url = '';
     if (!empty($metas)) {
         $system_prompt .= "\n\nDeze informatie komt uit de volgende onderdelen:\n";
         foreach ($metas as $meta) {
@@ -191,18 +202,26 @@ $fallback_text = $fallback . "\n\n[$link_text]($zoeklink)";
             $slug  = sanitize_text_field($meta['page_slug'] ?? '');
             $url   = esc_url_raw($meta['source_url'] ?? '');
 
-           if ($title && $slug) {
-    $doc_url = "https://login.octopus.be/manual/{$lang}/{$slug}";
-    if (octopus_ai_is_valid_url($doc_url)) {
-        $system_prompt .= "- *{$title}*\n  [Bekijk dit in de handleiding]({$doc_url})\n";
-        $validLinkFound = true;
+            if ($title && $url && octopus_ai_is_valid_url($url)) {
+                $is_manual = strpos($url, 'octopus.be/manual') !== false;
+                $label = $is_manual ? 'Bekijk dit in de handleiding' : 'Bekijk dit op de website';
+                $system_prompt .= "- *{$title}*\n  [{$label}]({$url})\n";
+                if (!$validLinkFound) {
+                    $primary_doc_url = $url;
+                }
+                $validLinkFound = true;
+            } elseif ($title && $slug) {
+                $doc_url = "https://login.octopus.be/manual/{$lang}/{$slug}";
+                if (octopus_ai_is_valid_url($doc_url)) {
+                    $system_prompt .= "- *{$title}*\n  [Bekijk dit in de handleiding]({$doc_url})\n";
+                    if (!$validLinkFound) {
+                        $primary_doc_url = $doc_url;
+                    }
+                    $validLinkFound = true;
+                }
+            }
+        }
     }
-} elseif ($title && $url) {
-    $system_prompt .= "- *{$title}*\n  [Bekijk dit op de website]({$url})\n";
-    $validLinkFound = true;
-}
-    }
-}
 
     // ➕ Opbouw history
     $messages = [['role' => 'system', 'content' => $system_prompt]];
@@ -291,29 +310,40 @@ $answer = preg_replace_callback(
 $answer = wp_specialchars_decode($answer, ENT_QUOTES);
 $answer = html_entity_decode($answer, ENT_QUOTES | ENT_HTML5, 'UTF-8');
 
-// ✅ Fallback-zoeklink als geen geldige link gevonden is
-if (
-    !$validLinkFound &&
-    (
-        trim($answer) === trim($fallback) ||
-        !preg_match('/https:\/\/login\.octopus\.be\/manual\/(NL|FR)\//', $answer)
-    )
-) {
-    if (!function_exists('octopus_ai_extract_keyword')) {
-        require_once plugin_dir_path(__FILE__) . 'helpers/extract-keyword.php';
+// ✅ Voeg directe link toe als beschikbaar maar nog niet aanwezig in het antwoord
+if ($primary_doc_url && strpos($answer, $primary_doc_url) === false) {
+    $is_manual = strpos($primary_doc_url, 'octopus.be/manual') !== false;
+    if ($is_manual) {
+        $label = ($lang === 'FR') ? 'Voir dans le manuel' : 'Bekijk dit in de handleiding';
+    } else {
+        $label = ($lang === 'FR') ? 'Voir sur le site' : 'Bekijk dit op de website';
     }
-    $keyword = octopus_ai_extract_keyword($message);
-    if ($keyword) {
-        $zoeklink = "https://login.octopus.be/manual/{$lang}/hmftsearch.htm?zoom_query=" . rawurlencode($keyword);
-
-        if (empty(trim($answer))) {
-            $answer = $fallback;
-        }
-
-        $label = ($lang === 'FR') ? 'Voir aussi dans la documentation' : 'Bekijk mogelijke info in de handleiding';
-        $answer .= "\n\n[$label]($zoeklink)";
-    }
+    $answer .= "\n\n[$label]($primary_doc_url)";
 }
+
+// ✅ Fallback-zoeklink als geen geldige link gevonden is (tijdelijk uitgeschakeld)
+// if (
+//     !$validLinkFound &&
+//     (
+//         trim($answer) === trim($fallback) ||
+//         !preg_match('/https:\/\/login\.octopus\.be\/manual\/(NL|FR)\//', $answer)
+//     )
+// ) {
+//     if (!function_exists('octopus_ai_extract_keyword')) {
+//         require_once plugin_dir_path(__FILE__) . 'helpers/extract-keyword.php';
+//     }
+//     $keyword = octopus_ai_extract_keyword($message);
+//     if ($keyword) {
+//         $zoeklink = "https://login.octopus.be/manual/{$lang}/hmftsearch.htm?zoom_query=" . rawurlencode($keyword);
+
+//         if (empty(trim($answer))) {
+//             $answer = $fallback;
+//         }
+
+//         $label = ($lang === 'FR') ? 'Voir aussi dans la documentation' : 'Bekijk mogelijke info in de handleiding';
+//         $answer .= "\n\n[$label]($zoeklink)";
+//     }
+// }
 
 if (!function_exists('octopus_ai_log_interaction')) {
     require_once plugin_dir_path(__FILE__) . 'includes/logger.php';
