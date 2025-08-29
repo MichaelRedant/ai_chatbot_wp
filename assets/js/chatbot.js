@@ -33,6 +33,12 @@ if (!lang || lang === '') {
 
     let sendCooldown = false;
 
+    function decodeUnicode(str) {
+        return str
+            .replace(/\\u([0-9a-fA-F]{4})/g, (_, hex) => String.fromCharCode(parseInt(hex, 16)))
+            .replace(/\u([0-9a-fA-F]{4})/g, (_, hex) => String.fromCharCode(parseInt(hex, 16)));
+    }
+
     // ✅ CSS-variabelen instellen
     document.documentElement.style.setProperty('--primary-color', settings.primary_color);
     document.documentElement.style.setProperty('--header-text-color', settings.header_text_color || '#ffffff');
@@ -151,6 +157,8 @@ chatReset.addEventListener('click', () => {
    function addMessage(content, sender = 'user', options = {}) {
     const message = document.createElement('div');
     message.classList.add(sender === 'user' ? 'user-message' : 'bot-message');
+
+    content = decodeUnicode(content);
 
     const html = content
     .replace(/\\n/g, '<br>')
