@@ -200,6 +200,7 @@ $fallback_text = $fallback . "\n\n[$link_text]($zoeklink)";
             $slug  = sanitize_text_field($meta['page_slug'] ?? '');
             $url   = esc_url_raw($meta['source_url'] ?? '');
 
+
             if ($title && $url && octopus_ai_is_valid_url($url)) {
                 $is_manual = strpos($url, 'octopus.be/manual') !== false;
                 $label = $is_manual ? 'Bekijk dit in de handleiding' : 'Bekijk dit op de website';
@@ -209,6 +210,7 @@ $fallback_text = $fallback . "\n\n[$link_text]($zoeklink)";
                 }
                 $validLinkFound = true;
             } elseif ($title && $slug) {
+
                 $doc_url = "https://login.octopus.be/manual/{$lang}/{$slug}";
                 if (octopus_ai_is_valid_url($doc_url)) {
                     $system_prompt .= "- *{$title}*\n  [Bekijk dit in de handleiding]({$doc_url})\n";
@@ -217,6 +219,7 @@ $fallback_text = $fallback . "\n\n[$link_text]($zoeklink)";
                     }
                     $validLinkFound = true;
                 }
+
             }
         }
     }
