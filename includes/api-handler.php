@@ -243,7 +243,9 @@ if (!$answer) {
 }
 
 // ✅ Unicode-decoding voor uXXXX of \uXXXX (zoals u00e9 → é)
-$answer = preg_replace_callback('/(?:\\\\u|\\?u)([0-9a-fA-F]{4})/', function ($matches) {
+
+$answer = preg_replace_callback('/\\\\?u([0-9a-fA-F]{4})/', function ($matches) {
+
     $hex = $matches[1];
     $bin = pack('H*', $hex);
     return mb_convert_encoding($bin, 'UTF-8', 'UTF-16BE');
