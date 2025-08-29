@@ -38,9 +38,11 @@
     #octopus-chat-toggle {
         animation: none;
     }
+
     #octopus-chat-toggle:hover {
         animation: none;
     }
+
 }
 
 #octopus-chat-toggle.pop-highlight {
@@ -389,6 +391,7 @@
     50%  { transform: translateY(-3px) scale(1.06); }
     100% { transform: translateY(-3px) scale(1); }
 }
+
 
 @keyframes pop {
     0%   { transform: scale(1); }
