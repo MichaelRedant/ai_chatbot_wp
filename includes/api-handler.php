@@ -201,6 +201,7 @@ if (!$relevantFound) {
         foreach ($metas as $meta) {
             $title = sanitize_text_field($meta['section_title'] ?? '');
             $slug  = sanitize_text_field($meta['page_slug'] ?? '');
+
             if ($title && $slug) {
                 $doc_url = "https://login.octopus.be/manual/{$lang}/{$slug}";
                 if (octopus_ai_is_valid_url($doc_url)) {
@@ -210,7 +211,9 @@ if (!$relevantFound) {
                         $primary_doc_url = $doc_url;
                     }
                     $validLinkFound = true;
+                    continue;
                 }
+
             }
         }
     }
