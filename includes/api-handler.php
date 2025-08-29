@@ -183,7 +183,8 @@ $fallback_text = $fallback . "\n\n[$link_text]($zoeklink)";
     $system_prompt .= "\n\nOpmerking:\nAls de gebruiker bevestigt dat hij verder geholpen wil worden (bijv. zegt 'ja'), geef dan een inhoudelijk vervolg op het onderwerp, niet een algemene begroeting of herstart.";
 
     // 📄 Links toevoegen
-    $validLinkFound = false;
+    $validLinkFound  = false;
+    $primary_doc_url = '';
     if (!empty($metas)) {
         $system_prompt .= "\n\nDeze informatie komt uit de volgende onderdelen:\n";
         foreach ($metas as $meta) {
@@ -191,18 +192,24 @@ $fallback_text = $fallback . "\n\n[$link_text]($zoeklink)";
             $slug  = sanitize_text_field($meta['page_slug'] ?? '');
             $url   = esc_url_raw($meta['source_url'] ?? '');
 
-           if ($title && $slug) {
-    $doc_url = "https://login.octopus.be/manual/{$lang}/{$slug}";
-    if (octopus_ai_is_valid_url($doc_url)) {
-        $system_prompt .= "- *{$title}*\n  [Bekijk dit in de handleiding]({$doc_url})\n";
-        $validLinkFound = true;
+            if ($title && $slug) {
+                $doc_url = "https://login.octopus.be/manual/{$lang}/{$slug}";
+                if (octopus_ai_is_valid_url($doc_url)) {
+                    $system_prompt .= "- *{$title}*\n  [Bekijk dit in de handleiding]({$doc_url})\n";
+                    if (!$validLinkFound) {
+                        $primary_doc_url = $doc_url;
+                    }
+                    $validLinkFound = true;
+                }
+            } elseif ($title && $url) {
+                $system_prompt .= "- *{$title}*\n  [Bekijk dit op de website]({$url})\n";
+                if (!$validLinkFound) {
+                    $primary_doc_url = $url;
+                }
+                $validLinkFound = true;
+            }
+        }
     }
-} elseif ($title && $url) {
-    $system_prompt .= "- *{$title}*\n  [Bekijk dit op de website]({$url})\n";
-    $validLinkFound = true;
-}
-    }
-}
 
     // ➕ Opbouw history
     $messages = [['role' => 'system', 'content' => $system_prompt]];
@@ -290,6 +297,17 @@ $answer = preg_replace_callback(
 );
 $answer = wp_specialchars_decode($answer, ENT_QUOTES);
 $answer = html_entity_decode($answer, ENT_QUOTES | ENT_HTML5, 'UTF-8');
+
+// ✅ Voeg directe link toe als beschikbaar maar nog niet aanwezig in het antwoord
+if ($primary_doc_url && strpos($answer, $primary_doc_url) === false) {
+    $is_manual = strpos($primary_doc_url, 'octopus.be/manual') !== false;
+    if ($is_manual) {
+        $label = ($lang === 'FR') ? 'Voir dans le manuel' : 'Bekijk dit in de handleiding';
+    } else {
+        $label = ($lang === 'FR') ? 'Voir sur le site' : 'Bekijk dit op de website';
+    }
+    $answer .= "\n\n[$label]($primary_doc_url)";
+}
 
 // ✅ Fallback-zoeklink als geen geldige link gevonden is
 if (
