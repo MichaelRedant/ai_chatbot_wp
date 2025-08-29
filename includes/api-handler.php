@@ -242,8 +242,8 @@ if (!$answer) {
     return new WP_Error('api_error', 'Fout van OpenAI: ' . $error_message);
 }
 
-// ✅ Unicode-decoding voor \uXXXX (zoals \u00e9 → é)
-$answer = preg_replace_callback('/\\\\u([0-9a-fA-F]{4})/', function ($matches) {
+// ✅ Unicode-decoding voor uXXXX of \uXXXX (zoals u00e9 → é)
+$answer = preg_replace_callback('/(?:\\\\u|\\?u)([0-9a-fA-F]{4})/', function ($matches) {
     $hex = $matches[1];
     $bin = pack('H*', $hex);
     return mb_convert_encoding($bin, 'UTF-8', 'UTF-16BE');
@@ -298,15 +298,14 @@ if (
     }
     $keyword = octopus_ai_extract_keyword($message);
     if ($keyword) {
-    $lang = (strpos($_SERVER['REQUEST_URI'], '/fr') !== false) ? 'FR' : 'NL';
-$zoeklink = "https://login.octopus.be/manual/{$lang}/hmftsearch.htm?zoom_query=" . rawurlencode($keyword);
+        $zoeklink = "https://login.octopus.be/manual/{$lang}/hmftsearch.htm?zoom_query=" . rawurlencode($keyword);
 
-if (empty(trim($answer))) {
-    $answer = $fallback;
-}
+        if (empty(trim($answer))) {
+            $answer = $fallback;
+        }
 
         $label = ($lang === 'FR') ? 'Voir aussi dans la documentation' : 'Bekijk mogelijke info in de handleiding';
-$answer .= "\n\n[$label]($zoeklink)";
+        $answer .= "\n\n[$label]($zoeklink)";
     }
 }
 
