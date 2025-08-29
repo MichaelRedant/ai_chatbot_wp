@@ -211,6 +211,7 @@ if (!$relevantFound) {
                 }
                 $validLinkFound = true;
             } elseif ($title && $slug) {
+
                 $doc_url = "https://login.octopus.be/manual/{$lang}/{$slug}";
                 if (octopus_ai_is_valid_url($doc_url)) {
                     $system_prompt .= "- *{$title}*\n  [Bekijk dit in de handleiding]({$doc_url})\n";
@@ -219,6 +220,7 @@ if (!$relevantFound) {
                     }
                     $validLinkFound = true;
                 }
+
             }
         }
     }
@@ -317,6 +319,7 @@ if ($primary_doc_url && strpos($answer, $primary_doc_url) === false) {
         $label = ($lang === 'FR') ? 'Voir dans le manuel' : 'Bekijk dit in de handleiding';
     } else {
         $label = ($lang === 'FR') ? 'Voir sur le site' : 'Bekijk dit op de website';
+
     }
     $answer .= "\n\n[$label]($primary_doc_url)";
 }
