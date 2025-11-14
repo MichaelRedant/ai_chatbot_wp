@@ -108,6 +108,7 @@ function octopus_ai_retrieve_relevant_chunks($question) {
                     'page_slug'     => $metadata['page_slug'] ?? '',
                     'original_page' => $metadata['original_page'] ?? '',
                     'source_url'    => $metadata['source_url'] ?? '',
+                    'score'         => $score,
                 ]
             ];
         }
