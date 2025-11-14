@@ -49,6 +49,40 @@ function octopus_ai_is_valid_url($url) {
 }
 
 
+if (!function_exists('octopus_ai_trim_surrounding_quotes')) {
+    function octopus_ai_trim_surrounding_quotes($text)
+    {
+        $trimmed = trim((string) $text);
+        if ($trimmed === '') {
+            return $trimmed;
+        }
+
+        $pairs = [
+            ['"', '"'],
+            ['“', '”'],
+            ['„', '“'],
+            ['«', '»'],
+        ];
+
+        foreach ($pairs as $pair) {
+            [$open, $close] = $pair;
+            $open_length  = mb_strlen($open);
+            $close_length = mb_strlen($close);
+            if (
+                mb_substr($trimmed, 0, $open_length) === $open &&
+                mb_substr($trimmed, -$close_length) === $close &&
+                mb_strlen($trimmed) >= ($open_length + $close_length)
+            ) {
+                $inner = mb_substr($trimmed, $open_length, mb_strlen($trimmed) - $open_length - $close_length);
+                return trim($inner);
+            }
+        }
+
+        return $trimmed;
+    }
+}
+
+
 function octopus_ai_get_settings()
 {
     wp_send_json_success(array(
@@ -318,6 +352,7 @@ $answer = preg_replace_callback(
 );
 $answer = wp_specialchars_decode($answer, ENT_QUOTES);
 $answer = html_entity_decode($answer, ENT_QUOTES | ENT_HTML5, 'UTF-8');
+$answer = octopus_ai_trim_surrounding_quotes($answer);
 
 // ✅ Voeg directe link toe als beschikbaar maar nog niet aanwezig in het antwoord
 if ($primary_doc_url && strpos($answer, $primary_doc_url) === false) {
