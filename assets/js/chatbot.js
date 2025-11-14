@@ -39,6 +39,28 @@ if (!lang || lang === '') {
             .replace(/\u([0-9a-fA-F]{4})/g, (_, hex) => String.fromCharCode(parseInt(hex, 16)));
     }
 
+    function stripWrappingQuotes(str) {
+        if (!str) {
+            return str;
+        }
+
+        const trimmed = str.trim();
+        const pairs = [
+            ['"', '"'],
+            ['“', '”'],
+            ['„', '“'],
+            ['«', '»']
+        ];
+
+        for (const [open, close] of pairs) {
+            if (trimmed.startsWith(open) && trimmed.endsWith(close)) {
+                return trimmed.slice(open.length, trimmed.length - close.length).trim();
+            }
+        }
+
+        return trimmed;
+    }
+
     // ✅ CSS-variabelen instellen
     document.documentElement.style.setProperty('--primary-color', settings.primary_color);
     document.documentElement.style.setProperty('--header-text-color', settings.header_text_color || '#ffffff');
@@ -159,6 +181,7 @@ chatReset.addEventListener('click', () => {
     message.classList.add(sender === 'user' ? 'user-message' : 'bot-message');
 
     content = decodeUnicode(content);
+    content = stripWrappingQuotes(content);
 
     const html = content
     .replace(/\\n/g, '<br>')
@@ -170,42 +193,6 @@ chatReset.addEventListener('click', () => {
 
 
     message.innerHTML = html;
-
-    if (sender === 'bot' && !options.isWelcome) {
-    const feedback = document.createElement('div');
-    feedback.className = 'feedback-buttons';
-    feedback.innerHTML = `
-    <button class="thumb-up" title="${settings.i18n.feedback_up}">👍</button>
-    <button class="thumb-down" title="${settings.i18n.feedback_down}">👎</button>
-`;
-
-    message.appendChild(feedback);
-
-    // ✅ Eventlisteners
-    feedback.querySelector('.thumb-up').addEventListener('click', () => sendFeedback('up', message.innerText));
-    feedback.querySelector('.thumb-down').addEventListener('click', () => sendFeedback('down', message.innerText));
-}
-
-
-
-    // Fallback-link
-    if (sender === 'bot' && fallbackTrigger && content.trim().toLowerCase().startsWith(fallbackTrigger.toLowerCase())) {
-        const lastUserMessages = Array.from(document.querySelectorAll('.user-message'));
-        const lastQuestion = lastUserMessages.length > 0 ? lastUserMessages.at(-1).innerText : '';
-        const keyword = extractKeyword(lastQuestion);
-
-        const fallbackLink = document.createElement('div');
-        fallbackLink.className = 'fallback-link';
-        fallbackLink.innerHTML = `
-<div style="margin-top:6px; font-size:12px; color:#666;">
-    ${settings.i18n.fallback_prefix}<br>
-    <a href="https://login.octopus.be/manual/${lang}/hmftsearch.htm?zoom_query=${encodeURIComponent(keyword)}" target="_blank" style="color: var(--primary-color); text-decoration: underline;">
-        ${settings.i18n.fallback_button}
-    </a>
-</div>
-`;
-        message.appendChild(fallbackLink);
-    }
 
     chatMessages.appendChild(message);
 chatMessages.scrollTo({
@@ -261,15 +248,7 @@ chatMessages.scrollTo({
 
 const isFallback = data.trim().toLowerCase().startsWith(fallbackTrigger.toLowerCase());
 
-        if (isFallback && !bevatLink) {
-            const zoekterm = extractKeyword(message);
-            const fallbackLink = `https://login.octopus.be/manual/${lang}/hmftsearch.htm?zoom_query=${encodeURIComponent(zoekterm)}`;
-
-            addMessage(`${data}<br><a href="${fallbackLink}" target="_blank" rel="noopener noreferrer">${settings.i18n.fallback_button}</a>`, 'bot');
-
-        } else {
-            addMessage(data, 'bot');
-        }
+        addMessage(data, 'bot');
 
         saveChatHistory();
 
@@ -288,18 +267,6 @@ function extractKeyword(question) {
     const words = question.toLowerCase().match(/\w+/g) || [];
     const keywords = words.filter(word => word.length > 3 && !blacklist.includes(word));
     return keywords[0] || 'octopus';
-}
-
-function sendFeedback(type, answer) {
-    fetch('/wp-json/octopus-ai/v1/feedback', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ feedback: type, answer })
-    }).then(() => {
-        alert(type === 'up' ? settings.i18n.feedback_up : settings.i18n.feedback_down);
-
-
-    });
 }
 
 // ⏳ Automatisch afsluiten na inactiviteit

@@ -19,8 +19,16 @@ function octopus_ai_retrieve_relevant_chunks($question) {
     if (!file_exists($chunks_dir)) {
         error_log('[Octopus AI] Chunks directory niet gevonden: ' . $chunks_dir);
         return [
-            'context' => '',
-            'metadata' => []
+            'context'  => '',
+            'metadata' => [
+                'chunks'  => [],
+                'summary' => [
+                    'section_title' => [],
+                    'page_slug'     => [],
+                    'original_page' => [],
+                    'source_url'    => [],
+                ],
+            ],
         ];
     }
 
@@ -107,7 +115,18 @@ function octopus_ai_retrieve_relevant_chunks($question) {
 
     if (empty($chunks_with_score)) {
         error_log('[Octopus AI] Geen relevante chunks gevonden voor vraag: ' . $question);
-        return ['context' => '', 'metadata' => []];
+        return [
+            'context'  => '',
+            'metadata' => [
+                'chunks'  => [],
+                'summary' => [
+                    'section_title' => [],
+                    'page_slug'     => [],
+                    'original_page' => [],
+                    'source_url'    => [],
+                ],
+            ],
+        ];
     }
 
     usort($chunks_with_score, fn($a, $b) => $b['score'] <=> $a['score']);
@@ -130,11 +149,18 @@ function octopus_ai_retrieve_relevant_chunks($question) {
         }
     }
 
-    $metadata = array_map(fn($arr) => array_filter(array_unique($arr)), $seen);
+    $metadata_summary = array_map(fn($arr) => array_values(array_filter(array_unique($arr))), $seen);
+    $top_chunks_metadata = array_map(
+        fn($chunk) => $chunk['metadata'],
+        array_slice($chunks_with_score, 0, 5)
+    );
+
     $result = [
         'context'  => trim($context),
-        'metadata' => $chunks_with_score[0]['metadata'] ?? [],
-        'metas'    => array_column(array_slice($chunks_with_score, 0, 5), 'metadata')
+        'metadata' => [
+            'chunks'  => $top_chunks_metadata,
+            'summary' => $metadata_summary,
+        ],
     ];
 
     // 🧠 Cache opslaan voor 6 uur
