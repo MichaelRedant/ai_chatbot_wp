@@ -42,6 +42,8 @@ if (!function_exists('octopus_ai_fetch_live_manual_context')) {
     }
 }
 
+require_once __DIR__ . '/helpers/live-manual.php';
+
 // ✅ REST API endpoint registreren
 add_action('rest_api_init', function () {
     register_rest_route('octopus-ai/v1', '/chatbot', array(
