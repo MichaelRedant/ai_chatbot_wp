@@ -385,6 +385,23 @@ if (
         }
 
         $label = ($lang === 'FR') ? 'Voir aussi dans la documentation' : 'Bekijk mogelijke info in de handleiding';
+
+        // 🧹 Verwijder eventuele losse fallback-tekst zonder link om dubbels te vermijden
+        $answer_lines = preg_split("/\r?\n/", $answer);
+        if ($answer_lines !== false) {
+            $answer_lines = array_filter(
+                $answer_lines,
+                static function ($line) use ($label) {
+                    $trimmed = trim($line, " \t\"'");
+                    return $trimmed !== $label;
+                }
+            );
+            $answer = trim(implode("\n", $answer_lines));
+        }
+
+        // Zorg dat er maximaal twee opeenvolgende nieuwe regels overblijven
+        $answer = preg_replace("/\n{3,}/", "\n\n", $answer ?? '');
+
         $answer .= "\n\n[$label]($zoeklink)";
     }
 }
