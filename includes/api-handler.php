@@ -7,6 +7,41 @@ if (!function_exists('octopus_ai_detect_intent')) {
     require_once __DIR__ . '/helpers/intent-detector.php';
 }
 
+if (!function_exists('octopus_ai_get_manual_mode') || !function_exists('octopus_ai_fetch_live_manual_context')) {
+    $live_manual_helper = __DIR__ . '/helpers/live-manual.php';
+    if (file_exists($live_manual_helper)) {
+        require_once $live_manual_helper;
+    }
+}
+
+if (!function_exists('octopus_ai_get_manual_mode')) {
+    function octopus_ai_get_manual_mode()
+    {
+        $mode = get_option('octopus_ai_manual_mode', 'hybrid');
+        $allowed = ['local', 'hybrid', 'live'];
+
+        if (!in_array($mode, $allowed, true)) {
+            error_log('[Octopus AI] Onbekende manual-modus, val terug op "hybrid".');
+            return 'hybrid';
+        }
+
+        return $mode;
+    }
+}
+
+if (!function_exists('octopus_ai_fetch_live_manual_context')) {
+    function octopus_ai_fetch_live_manual_context($metadata_chunks, $lang)
+    {
+        error_log('[Octopus AI] Live manual helper ontbreekt, live-context wordt overgeslagen.');
+
+        return [
+            'text'    => '',
+            'sources' => [],
+            'errors'  => [],
+        ];
+    }
+}
+
 require_once __DIR__ . '/helpers/live-manual.php';
 
 // ✅ REST API endpoint registreren
@@ -114,10 +149,6 @@ function octopus_ai_chatbot_callback($request)
         $lang = 'FR';
     } elseif (strpos($lang_header, 'fr') === 0) {
         $lang = 'FR';
-    }
-
-    if (!function_exists('octopus_ai_get_manual_mode')) {
-        require_once plugin_dir_path(__FILE__) . 'helpers/live-manual.php';
     }
 
     $manual_mode = octopus_ai_get_manual_mode();
@@ -271,40 +302,6 @@ EOT;
         }
     }
 
-    if (!empty($metadata_chunks)) {
-        if (!function_exists('octopus_ai_fetch_live_manual_context')) {
-            require_once plugin_dir_path(__FILE__) . 'helpers/live-manual.php';
-        }
-
-        $live_manual = octopus_ai_fetch_live_manual_context($metadata_chunks, $lang);
-        if (is_array($live_manual)) {
-            $live_context = isset($live_manual['text']) ? trim((string) $live_manual['text']) : '';
-            $live_sources = isset($live_manual['sources']) && is_array($live_manual['sources'])
-                ? array_values(array_filter($live_manual['sources']))
-                : [];
-
-            if (!empty($live_manual['errors']) && is_array($live_manual['errors'])) {
-                foreach ($live_manual['errors'] as $error_item) {
-                    $error_url    = $error_item['url'] ?? '';
-                    $error_status = $error_item['status'] ?? '';
-                    $error_text   = $error_item['error'] ?? '';
-
-                    if ($error_url === '') {
-                        continue;
-                    }
-
-                    if ((int) $error_status === 403) {
-                        error_log(sprintf('[Octopus AI] Handleiding vereist login (403) voor %s', $error_url));
-                    } elseif ($error_status !== 200 && $error_status !== '') {
-                        error_log(sprintf('[Octopus AI] Handleiding niet opgehaald (%s) voor %s: %s', $error_status, $error_url, $error_text));
-                    } elseif ($error_status === 0 && $error_text !== '') {
-                        error_log(sprintf('[Octopus AI] Handleiding niet opgehaald voor %s: %s', $error_url, $error_text));
-                    }
-                }
-            }
-        }
-    }
-
     // ❌ Als er geen relevante context gevonden werd, geef fallback met zoeklink terug
     if (!$relevantFound) {
         if (!function_exists('octopus_ai_extract_keyword')) {
@@ -327,10 +324,18 @@ EOT;
 
 
     // ➕ Prompt opbouwen
-    $system_prompt = $tone . "\n\nContext:\n" . $context;
+    $system_prompt = $tone;
+
+    if ($context !== '') {
+        $system_prompt .= "\n\nContext (chunks):\n" . $context;
+    }
 
     if ($live_context !== '') {
         $system_prompt .= "\n\nLive handleiding (laatste versie):\n" . $live_context;
+    }
+
+    if ($context === '' && $live_context === '') {
+        $system_prompt .= "\n\nContext:\n";
     }
     $system_prompt .= "\n\nOpmerking:\nAls de gebruiker bevestigt dat hij verder geholpen wil worden (bijv. zegt 'ja'), geef dan een inhoudelijk vervolg op het onderwerp, niet een algemene begroeting of herstart.";
 
@@ -377,6 +382,17 @@ EOT;
                     $system_prompt .= "  [{$label}]({$link})\n";
                 }
             }
+        }
+    }
+
+    if (empty($metadata_chunks) && !empty($live_sources)) {
+        $system_prompt .= "\n\nLive bronnen:\n";
+        foreach ($live_sources as $link) {
+            $label = ($lang === 'FR') ? 'Voir dans le manuel' : 'Bekijk dit in de handleiding';
+            if ($link && strpos($link, 'octopus.be/manual') === false) {
+                $label = ($lang === 'FR') ? 'Voir la source' : 'Bekijk de bron';
+            }
+            $system_prompt .= "- [{$label}]({$link})\n";
         }
     }
 
