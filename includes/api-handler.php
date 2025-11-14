@@ -5,8 +5,9 @@ if (!defined('ABSPATH')) exit;
 
 if (!function_exists('octopus_ai_detect_intent')) {
     require_once __DIR__ . '/helpers/intent-detector.php';
-
 }
+
+require_once __DIR__ . '/helpers/live-manual.php';
 
 // ✅ REST API endpoint registreren
 add_action('rest_api_init', function () {
