@@ -115,6 +115,14 @@ function octopus_ai_chatbot_callback($request)
         $lang = 'FR';
     }
 
+    if (!function_exists('octopus_ai_get_manual_mode')) {
+        require_once plugin_dir_path(__FILE__) . 'helpers/live-manual.php';
+    }
+
+    $manual_mode = octopus_ai_get_manual_mode();
+    $use_live_manual = in_array($manual_mode, ['live', 'hybrid'], true);
+    $use_local_chunks = $manual_mode !== 'live';
+
     $api_key = trim((string) get_option('octopus_ai_api_key'));
     if ($lang === 'FR') {
     $tone = <<<EOT
@@ -201,7 +209,7 @@ EOT;
     $live_context = '';
     $live_sources = [];
 
-    if (function_exists('octopus_ai_retrieve_relevant_chunks')) {
+    if ($use_local_chunks && function_exists('octopus_ai_retrieve_relevant_chunks')) {
         $result = octopus_ai_retrieve_relevant_chunks($message);
         $context = $result['context'] ?? '';
 
@@ -215,6 +223,50 @@ EOT;
 
         if (!empty($context) && strlen($context) > 20) {
             $relevantFound = true;
+        }
+    } elseif (function_exists('octopus_ai_retrieve_relevant_chunks')) {
+        // We gebruiken de metadata nog steeds om live bronnen te bepalen in live-modus.
+        $result = octopus_ai_retrieve_relevant_chunks($message);
+        if (isset($result['metadata']['chunks']) && is_array($result['metadata']['chunks'])) {
+            $metadata_chunks = $result['metadata']['chunks'];
+        } elseif (isset($result['metadatas']) && is_array($result['metadatas'])) {
+            $metadata_chunks = $result['metadatas'];
+        } elseif (isset($result['metas']) && is_array($result['metas'])) {
+            $metadata_chunks = $result['metas'];
+        }
+    }
+
+    if ($use_live_manual) {
+        $live_manual = octopus_ai_fetch_live_manual_context($metadata_chunks, $lang);
+        if (is_array($live_manual)) {
+            $live_context = isset($live_manual['text']) ? trim((string) $live_manual['text']) : '';
+            $live_sources = isset($live_manual['sources']) && is_array($live_manual['sources'])
+                ? array_values(array_filter($live_manual['sources']))
+                : [];
+
+            if ($live_context !== '') {
+                $relevantFound = true;
+            }
+
+            if (!empty($live_manual['errors']) && is_array($live_manual['errors'])) {
+                foreach ($live_manual['errors'] as $error_item) {
+                    $error_url    = $error_item['url'] ?? '';
+                    $error_status = $error_item['status'] ?? '';
+                    $error_text   = $error_item['error'] ?? '';
+
+                    if ($error_url === '') {
+                        continue;
+                    }
+
+                    if ((int) $error_status === 403) {
+                        error_log(sprintf('[Octopus AI] Handleiding vereist login (403) voor %s', $error_url));
+                    } elseif ($error_status !== 200 && $error_status !== '') {
+                        error_log(sprintf('[Octopus AI] Handleiding niet opgehaald (%s) voor %s: %s', $error_status, $error_url, $error_text));
+                    } elseif ($error_status === 0 && $error_text !== '') {
+                        error_log(sprintf('[Octopus AI] Handleiding niet opgehaald voor %s: %s', $error_url, $error_text));
+                    }
+                }
+            }
         }
     }
 
