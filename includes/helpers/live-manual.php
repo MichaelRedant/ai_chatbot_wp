@@ -2,109 +2,6 @@
 if (!defined('ABSPATH')) exit;
 
 /**
- * Haal de ingestelde modus voor documentatie op.
- *
- * @return string
- */
-function octopus_ai_get_manual_mode()
-{
-    $mode = get_option('octopus_ai_manual_mode', 'hybrid');
-    $allowed = ['local', 'hybrid', 'live'];
-
-    return in_array($mode, $allowed, true) ? $mode : 'hybrid';
-}
-
-/**
- * Normaliseert een basis-URL zodat hij altijd met een slash eindigt.
- *
- * @param string $url
- * @return string
- */
-function octopus_ai_normalize_manual_base($url)
-{
-    $url = trim((string) $url);
-    if ($url === '') {
-        return '';
-    }
-
-    $url = rtrim($url, " \\t\n\r\0\x0B");
-
-    if (!in_array(substr($url, -1), ['/', '?'], true)) {
-        $url .= '/';
-    }
-
-    return $url;
-}
-
-/**
- * Bepaal de basis-URL voor de handleiding per taal.
- *
- * @param string $lang
- * @return string
- */
-function octopus_ai_get_manual_base_url($lang)
-{
-    $lang_key = strtoupper($lang) === 'FR' ? 'fr' : 'nl';
-    $option_name = $lang_key === 'fr' ? 'octopus_ai_manual_base_url_fr' : 'octopus_ai_manual_base_url_nl';
-    $custom_base = trim((string) get_option($option_name, ''));
-
-    if ($custom_base !== '') {
-        $normalized = octopus_ai_normalize_manual_base($custom_base);
-        if ($normalized !== '') {
-            return $normalized;
-        }
-    }
-
-    return $lang_key === 'fr'
-        ? 'https://login.octopus.be/manual/FR/'
-        : 'https://login.octopus.be/manual/NL/';
-}
-
-/**
- * Ophalen van handmatig ingestelde prioritaire URL's.
- *
- * @param string $lang
- * @return array<int, string>
- */
-function octopus_ai_get_manual_priority_urls($lang)
-{
-    $lang_key = strtoupper($lang) === 'FR' ? 'fr' : 'nl';
-    $option_name = $lang_key === 'fr' ? 'octopus_ai_manual_priority_urls_fr' : 'octopus_ai_manual_priority_urls_nl';
-    $raw = (string) get_option($option_name, '');
-
-    if ($raw === '') {
-        return [];
-    }
-
-    $parts = preg_split('/[\r\n,]+/', $raw);
-    $urls = [];
-
-    if (is_array($parts)) {
-        foreach ($parts as $part) {
-            $candidate = trim((string) $part);
-            if ($candidate === '') {
-                continue;
-            }
-
-            $candidate = esc_url_raw($candidate);
-            if ($candidate === '') {
-                continue;
-            }
-
-            if (function_exists('wp_http_validate_url') && !wp_http_validate_url($candidate)) {
-                continue;
-            }
-
-            if (!in_array($candidate, $urls, true)) {
-                $urls[] = $candidate;
-            }
-        }
-    }
-
-    return $urls;
-}
-
-/**
  * Bouwt mogelijke handleiding-URL's op basis van chunk-metadata.
  *
  * @param array  $metadata_chunks
@@ -113,9 +10,8 @@ function octopus_ai_get_manual_priority_urls($lang)
  */
 function octopus_ai_build_manual_urls(array $metadata_chunks, $lang)
 {
-    $urls = octopus_ai_get_manual_priority_urls($lang);
+    $urls = [];
     $lang = strtoupper($lang) === 'FR' ? 'FR' : 'NL';
-    $base_url = octopus_ai_get_manual_base_url($lang);
 
     foreach ($metadata_chunks as $meta) {
         if (!is_array($meta)) {
@@ -132,7 +28,7 @@ function octopus_ai_build_manual_urls(array $metadata_chunks, $lang)
 
         if ($page_slug !== '') {
             $page_slug = ltrim($page_slug, '/');
-            $candidates[] = trailingslashit($base_url) . $page_slug;
+            $candidates[] = sprintf('https://login.octopus.be/manual/%s/%s', $lang, $page_slug);
         }
 
         foreach ($candidates as $candidate) {
@@ -152,7 +48,7 @@ function octopus_ai_build_manual_urls(array $metadata_chunks, $lang)
             }
         }
 
-        if (count($urls) >= 5) {
+        if (count($urls) >= 3) {
             break;
         }
     }
