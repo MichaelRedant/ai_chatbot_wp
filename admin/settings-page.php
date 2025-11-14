@@ -386,15 +386,87 @@ function octopus_ai_settings_page() {
                         <select name="octopus_ai_model" style="width: 400px;">
                             <?php
                             $models = [
-                                'gpt-4.1-mini'   => 'GPT-4.1 Mini ⚖️ (aanbevolen)',
-                                'gpt-4o'         => 'GPT-4o 🧠⚡ (snel en krachtig)',
-                                'gpt-4.1-nano'   => 'GPT-4.1 Nano 🚀 (supersnel)',
-                                'gpt-4.1'        => 'GPT-4.1 🧠 (maximale accuraatheid)',
-                                'o4-mini'        => 'OpenAI o4-mini 🔬 (voor redenering)',
-                                'gpt-3.5-turbo'  => 'GPT-3.5 Turbo 💬 (budgetoptie)'
+                                'gpt-4o-mini'            => [
+                                    'name'        => 'GPT-4o Mini',
+                                    'description' => 'Betaalbaar, snel en perfect voor dagelijkse supportvragen.',
+                                    'pricing'     => '$0.15 / $0.60',
+                                ],
+                                'gpt-4o-2024-11-20'      => [
+                                    'name'        => 'GPT-4o (2024-11-20)',
+                                    'description' => 'Geoptimaliseerde release voor betrouwbaarheid op langere gesprekken.',
+                                    'pricing'     => '$0.22 / $0.88',
+                                ],
+                                'gpt-4.1'                => [
+                                    'name'        => 'GPT-4.1',
+                                    'description' => 'Maximale nauwkeurigheid voor complexe procesvragen.',
+                                    'pricing'     => '$2.00 / $8.00',
+                                ],
+                                'gpt-3.5-turbo'          => [
+                                    'name'        => 'GPT-3.5 Turbo',
+                                    'description' => 'Budgetvriendelijk voor eenvoudige Q&A en standaardflows.',
+                                    'pricing'     => '$0.50 / $1.50',
+                                ],
+                                'gpt-4o'                 => [
+                                    'name'        => 'GPT-4o',
+                                    'description' => 'Snel en accuraat voor intensief dagelijks gebruik.',
+                                    'pricing'     => '$0.50 / $1.50',
+                                ],
+                                'gpt-4.1-nano-2025-04-14' => [
+                                    'name'        => 'GPT-4.1 Nano (2025-04-14)',
+                                    'description' => 'Supersnelle nano-variant voor korte hints en checks.',
+                                    'pricing'     => '$0.08 / $0.32',
+                                ],
+                                'gpt-4.1-mini'           => [
+                                    'name'        => 'GPT-4.1 Mini',
+                                    'description' => 'Allround balans tussen kwaliteit en prijs, aanbevolen.',
+                                    'pricing'     => '$0.40 / $1.60',
+                                ],
+                                'gpt-5-nano'             => [
+                                    'name'        => 'GPT-5 Nano',
+                                    'description' => 'Nieuwste nano-upgrade met betere contextbehoud.',
+                                    'pricing'     => '$0.12 / $0.48',
+                                ],
+                                'gpt-5'                  => [
+                                    'name'        => 'GPT-5',
+                                    'description' => 'Premiummodel voor diepgaande dossieranalyses.',
+                                    'pricing'     => '$2.50 / $10.00',
+                                ],
+                                'gpt-5.1-2025-11-13'     => [
+                                    'name'        => 'GPT-5.1 (2025-11-13)',
+                                    'description' => 'Langetermijnrelease met focus op stabiliteit en audit trails.',
+                                    'pricing'     => '$3.00 / $12.00',
+                                ],
+                                'gpt-5-codex'            => [
+                                    'name'        => 'GPT-5 Codex',
+                                    'description' => 'Codex-variant met uitstekende stappenplannen en scripts.',
+                                    'pricing'     => '$1.20 / $4.80',
+                                ],
+                                'gpt-4'                  => [
+                                    'name'        => 'GPT-4',
+                                    'description' => 'Bewezen klasieker voor nauwkeurige antwoorden.',
+                                    'pricing'     => '$1.50 / $6.00',
+                                ],
+                                'gpt-5.1-codex'          => [
+                                    'name'        => 'GPT-5.1 Codex',
+                                    'description' => 'Meest recente Codex-versie met verbeterde taakautomatisering.',
+                                    'pricing'     => '$1.60 / $6.40',
+                                ],
+                                'gpt-5.1'                => [
+                                    'name'        => 'GPT-5.1',
+                                    'description' => 'Topmodel voor kritieke klantcases en escalaties.',
+                                    'pricing'     => '$2.80 / $11.20',
+                                ],
                             ];
-                            foreach ($models as $value => $label) {
-                                echo '<option value="' . esc_attr($value) . '" ' . selected($selected_model, $value, false) . '>' . esc_html($label) . '</option>';
+
+                            foreach ($models as $value => $info) {
+                                $option_label = sprintf(
+                                    '%s – %s (± %s per 1K tokens)',
+                                    $info['name'],
+                                    $info['description'],
+                                    $info['pricing']
+                                );
+
+                                echo '<option value="' . esc_attr($value) . '" ' . selected($selected_model, $value, false) . '>' . esc_html($option_label) . '</option>';
                             }
                             ?>
                         </select>
@@ -406,21 +478,20 @@ function octopus_ai_settings_page() {
                         <div id="model-info-table" style="display:none; margin-top:10px; border:1px solid #ddd; padding:10px; border-radius:6px; background:#f9f9f9;">
                             <table class="widefat striped">
                                 <thead>
-                                    <tr><th>Model</th><th>Snelheid ⚡</th><th>Intelligentie 🧠</th><th>Prijs / 1K tokens</th><th>Aanbevolen voor</th></tr>
+                                    <tr>
+                                        <th>Model</th>
+                                        <th>Korte uitleg</th>
+                                        <th>Prijs (prompt/completion per 1K tokens)</th>
+                                    </tr>
                                 </thead>
                                 <tbody>
-                                    <tr><td>GPT-4.1 Mini</td><td>⚡⚡⚡</td><td>🧠🧠🧠</td><td>$0.40 / $1.60</td><td>⚖️ Balans snelheid/kwaliteit</td></tr>
-                                    <tr>
-    <td>GPT-4o</td>
-    <td>⚡⚡⚡⚡</td>
-    <td>🧠🧠🧠🧠</td>
-    <td>$0.50 / $1.50</td>
-    <td>🧠⚡ Nieuw, snel & accuraat</td>
-</tr>
-                                    <tr><td>GPT-4.1 Nano</td><td>⚡⚡⚡⚡</td><td>🧠🧠</td><td>$0.10 / $0.40</td><td>🚀 Snelle basistaken</td></tr>
-                                    <tr><td>GPT-4.1</td><td>⚡</td><td>🧠🧠🧠🧠</td><td>$2.00 / $8.00</td><td>💡 Complexe vragen</td></tr>
-                                    <tr><td>OpenAI o4-mini</td><td>⚡⚡</td><td>🧠🧠🧠🧠</td><td>$1.10 / $4.40</td><td>🔬 Redenering & logica</td></tr>
-                                    <tr><td>GPT-3.5 Turbo</td><td>⚡⚡⚡</td><td>🧠</td><td>± $0.50 / $1.50</td><td>💬 Budgetoptie</td></tr>
+                                    <?php foreach ($models as $info) : ?>
+                                        <tr>
+                                            <td><?php echo esc_html($info['name']); ?></td>
+                                            <td><?php echo esc_html($info['description']); ?></td>
+                                            <td><?php echo esc_html($info['pricing']); ?></td>
+                                        </tr>
+                                    <?php endforeach; ?>
                                 </tbody>
                             </table>
                         </div>
