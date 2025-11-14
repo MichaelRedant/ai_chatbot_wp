@@ -54,6 +54,59 @@ function octopus_ai_register_settings() {
     register_setting('octopus_ai_settings_group', 'octopus_ai_selected_pages', function($value){
         return array_map('intval', (array) $value);
     });
+    register_setting('octopus_ai_settings_group', 'octopus_ai_manual_mode', 'octopus_ai_sanitize_manual_mode');
+    register_setting('octopus_ai_settings_group', 'octopus_ai_manual_base_url_nl', 'octopus_ai_sanitize_manual_url');
+    register_setting('octopus_ai_settings_group', 'octopus_ai_manual_base_url_fr', 'octopus_ai_sanitize_manual_url');
+    register_setting('octopus_ai_settings_group', 'octopus_ai_manual_priority_urls_nl', 'octopus_ai_sanitize_manual_url_list');
+    register_setting('octopus_ai_settings_group', 'octopus_ai_manual_priority_urls_fr', 'octopus_ai_sanitize_manual_url_list');
+}
+
+function octopus_ai_sanitize_manual_mode($value) {
+    $allowed = ['local', 'hybrid', 'live'];
+    $value = is_string($value) ? strtolower($value) : '';
+    if (!in_array($value, $allowed, true)) {
+        return 'hybrid';
+    }
+    return $value;
+}
+
+function octopus_ai_sanitize_manual_url($value) {
+    $value = trim((string) $value);
+    if ($value === '') {
+        return '';
+    }
+
+    $sanitized = esc_url_raw($value);
+    if ($sanitized === '') {
+        return '';
+    }
+
+    if (function_exists('wp_http_validate_url') && !wp_http_validate_url($sanitized)) {
+        return '';
+    }
+
+    return $sanitized;
+}
+
+function octopus_ai_sanitize_manual_url_list($value) {
+    $value = (string) $value;
+    if ($value === '') {
+        return '';
+    }
+
+    $parts = preg_split('/[\r\n,]+/', $value);
+    $valid = [];
+
+    if (is_array($parts)) {
+        foreach ($parts as $part) {
+            $sanitized = octopus_ai_sanitize_manual_url($part);
+            if ($sanitized !== '' && !in_array($sanitized, $valid, true)) {
+                $valid[] = $sanitized;
+            }
+        }
+    }
+
+    return implode("\n", $valid);
 }
 
 // --- PDF UPLOAD + CHUNKING ---
@@ -222,6 +275,11 @@ function octopus_ai_settings_page() {
     $api_key = get_option('octopus_ai_api_key');
     $masked_key = $api_key ? substr($api_key, 0, 5) . str_repeat('*', strlen($api_key) - 10) . substr($api_key, -5) : '';
     $selected_model = get_option('octopus_ai_model', 'gpt-4.1-mini');
+    $manual_mode = get_option('octopus_ai_manual_mode', 'hybrid');
+    $manual_base_nl = get_option('octopus_ai_manual_base_url_nl', '');
+    $manual_base_fr = get_option('octopus_ai_manual_base_url_fr', '');
+    $manual_priority_nl = get_option('octopus_ai_manual_priority_urls_nl', '');
+    $manual_priority_fr = get_option('octopus_ai_manual_priority_urls_fr', '');
     ?>
     <style>
     .octopus-settings .form-table th {
@@ -501,6 +559,58 @@ function octopus_ai_settings_page() {
                                 el.style.display = el.style.display === "none" ? "block" : "none";
                             }
                         </script>
+                    </td>
+                </tr>
+            </table>
+
+            <h2>📄 Documentatiebron</h2>
+            <p class="section-description">Bepaal of de chatbot lokale chunks gebruikt, live de handleiding ophaalt of beide combineert.</p>
+            <table class="form-table">
+                <tr>
+                    <th>Werking</th>
+                    <td>
+                        <fieldset>
+                            <label style="display:block;margin-bottom:6px;">
+                                <input type="radio" name="octopus_ai_manual_mode" value="local" <?php checked('local', $manual_mode); ?>>
+                                Alleen lokale chunks gebruiken
+                            </label>
+                            <label style="display:block;margin-bottom:6px;">
+                                <input type="radio" name="octopus_ai_manual_mode" value="hybrid" <?php checked('hybrid', $manual_mode); ?>>
+                                Hybride: eerst chunks, aanvullend live handleiding
+                            </label>
+                            <label style="display:block;">
+                                <input type="radio" name="octopus_ai_manual_mode" value="live" <?php checked('live', $manual_mode); ?>>
+                                Alleen live handleiding gebruiken
+                            </label>
+                        </fieldset>
+                    </td>
+                </tr>
+                <tr>
+                    <th>Basis URL NL</th>
+                    <td>
+                        <input type="url" name="octopus_ai_manual_base_url_nl" value="<?php echo esc_attr($manual_base_nl); ?>" placeholder="https://login.octopus.be/manual/NL/" />
+                        <p class="description">Optioneel: wijzig de basis van de Nederlandstalige handleiding indien je een andere omgeving gebruikt. Laat leeg voor de standaard Octopus URL.</p>
+                    </td>
+                </tr>
+                <tr>
+                    <th>Basis URL FR</th>
+                    <td>
+                        <input type="url" name="octopus_ai_manual_base_url_fr" value="<?php echo esc_attr($manual_base_fr); ?>" placeholder="https://login.octopus.be/manual/FR/" />
+                        <p class="description">Optioneel: wijzig de basis van de Franstalige handleiding indien nodig.</p>
+                    </td>
+                </tr>
+                <tr>
+                    <th>Voorkeurspagina's NL</th>
+                    <td>
+                        <textarea name="octopus_ai_manual_priority_urls_nl" rows="3" placeholder="https://login.octopus.be/manual/NL/voorbeeld.htm&#10;https://login.octopus.be/manual/NL/andere-pagina.htm"><?php echo esc_textarea($manual_priority_nl); ?></textarea>
+                        <p class="description">Geef één of meerdere URL's op (één per lijn) die eerst live opgehaald mogen worden wanneer de chatbot de handleiding raadpleegt.</p>
+                    </td>
+                </tr>
+                <tr>
+                    <th>Voorkeurspagina's FR</th>
+                    <td>
+                        <textarea name="octopus_ai_manual_priority_urls_fr" rows="3" placeholder="https://login.octopus.be/manual/FR/exemple.htm"><?php echo esc_textarea($manual_priority_fr); ?></textarea>
+                        <p class="description">Worden gebruikt voor Franstalige sessies. Laat leeg om enkel de metadata van chunks te volgen.</p>
                     </td>
                 </tr>
             </table>
