@@ -81,7 +81,7 @@ function octopus_ai_chatbot_callback($request)
         $lang = 'FR';
     }
 
-    $api_key = get_option('octopus_ai_api_key');
+    $api_key = trim((string) get_option('octopus_ai_api_key'));
     if ($lang === 'FR') {
     $tone = <<<EOT
 🎯 Objectif
@@ -153,40 +153,54 @@ EOT;
     ? "Désolé, je ne peux pas t’aider avec ça."
     : get_option('octopus_ai_fallback', 'Sorry, daar kan ik je niet mee helpen.');
 
+    if ($api_key === '') {
+        return new WP_Error(
+            'octopus_ai_missing_api_key',
+            __('Octopus AI API key ontbreekt. Voeg een geldige key toe op de instellingenpagina.', 'octopus-ai')
+        );
+    }
+
     $model = get_option('octopus_ai_model', 'gpt-4.1-mini');
     $context = '';
-$metas = [];
-$relevantFound = false;
+    $metadata_chunks = [];
+    $relevantFound = false;
 
-if (function_exists('octopus_ai_retrieve_relevant_chunks')) {
-    $result = octopus_ai_retrieve_relevant_chunks($message);
-    $context = $result['context'] ?? '';
-    $metas   = $result['metas'] ?? [];
+    if (function_exists('octopus_ai_retrieve_relevant_chunks')) {
+        $result = octopus_ai_retrieve_relevant_chunks($message);
+        $context = $result['context'] ?? '';
 
-    if (!empty($context) && strlen($context) > 20) {
-        $relevantFound = true;
+        if (isset($result['metadata']['chunks']) && is_array($result['metadata']['chunks'])) {
+            $metadata_chunks = $result['metadata']['chunks'];
+        } elseif (isset($result['metadatas']) && is_array($result['metadatas'])) {
+            $metadata_chunks = $result['metadatas'];
+        } elseif (isset($result['metas']) && is_array($result['metas'])) {
+            $metadata_chunks = $result['metas'];
+        }
+
+        if (!empty($context) && strlen($context) > 20) {
+            $relevantFound = true;
+        }
     }
-}
 
-// ❌ Als er geen relevante context gevonden werd, geef fallback met zoeklink terug
-if (!$relevantFound) {
-    if (!function_exists('octopus_ai_extract_keyword')) {
-        require_once plugin_dir_path(__FILE__) . 'helpers/extract-keyword.php';
+    // ❌ Als er geen relevante context gevonden werd, geef fallback met zoeklink terug
+    if (!$relevantFound) {
+        if (!function_exists('octopus_ai_extract_keyword')) {
+            require_once plugin_dir_path(__FILE__) . 'helpers/extract-keyword.php';
+        }
+
+        $keyword = octopus_ai_extract_keyword($message);
+        if ($keyword) {
+            $zoeklink = "https://login.octopus.be/manual/{$lang}/hmftsearch.htm?zoom_query=" . rawurlencode($keyword);
+
+            $link_text = ($lang === 'FR')
+                ? 'Voir aussi dans la documentation'
+                : 'Bekijk mogelijke info in de handleiding';
+
+            $fallback_text = $fallback . "\n\n[$link_text]($zoeklink)";
+            return $fallback_text; // ← GEEN do_shortcode()
+        }
+        return $fallback;
     }
-
-    $keyword = octopus_ai_extract_keyword($message);
-    if ($keyword) {
-        $zoeklink = "https://login.octopus.be/manual/{$lang}/hmftsearch.htm?zoom_query=" . rawurlencode($keyword);
-
-        $link_text = ($lang === 'FR')
-            ? 'Voir aussi dans la documentation'
-            : 'Bekijk mogelijke info in de handleiding';
-
-        $fallback_text = $fallback . "\n\n[$link_text]($zoeklink)";
-        return $fallback_text; // ← GEEN do_shortcode()
-    }
-    return $fallback;
-}
 
 
     // ➕ Prompt opbouwen
@@ -196,9 +210,9 @@ if (!$relevantFound) {
     // 📄 Links toevoegen
     $validLinkFound  = false;
     $primary_doc_url = '';
-    if (!empty($metas)) {
+    if (!empty($metadata_chunks)) {
         $system_prompt .= "\n\nDeze informatie komt uit de volgende onderdelen:\n";
-        foreach ($metas as $meta) {
+        foreach ($metadata_chunks as $meta) {
             $title = sanitize_text_field($meta['section_title'] ?? '');
             $slug  = sanitize_text_field($meta['page_slug'] ?? '');
 
@@ -341,7 +355,7 @@ if (
 }
 
 if (!function_exists('octopus_ai_log_interaction')) {
-    require_once plugin_dir_path(__FILE__) . 'includes/logger.php';
+    require_once plugin_dir_path(__FILE__) . 'logger.php';
 
 }
 
