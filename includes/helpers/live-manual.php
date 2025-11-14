@@ -244,26 +244,109 @@ function octopus_ai_normalize_manual_text($html)
     return trim($text);
 }
 
+if (!function_exists('octopus_ai_normalize_text_for_compare')) {
+    function octopus_ai_normalize_text_for_compare($text)
+    {
+        $text = strtolower(trim((string) $text));
+
+        if ($text === '') {
+            return '';
+        }
+
+        if (class_exists('Transliterator')) {
+            $transliterator = Transliterator::create('NFD; [:Nonspacing Mark:] Remove; NFC');
+            if ($transliterator) {
+                $text = $transliterator->transliterate($text);
+            }
+        } else {
+            $converted = @iconv('UTF-8', 'ASCII//TRANSLIT', $text);
+            if ($converted !== false) {
+                $text = $converted;
+            }
+        }
+
+        $text = preg_replace('/[^a-z0-9\s]/', ' ', $text);
+        $text = preg_replace('/\s+/', ' ', $text);
+
+        return trim((string) $text);
+    }
+}
+
+if (!function_exists('octopus_ai_score_manual_snippet')) {
+    function octopus_ai_score_manual_snippet($question, $snippet, $url = '')
+    {
+        $normalized_question = octopus_ai_normalize_text_for_compare($question);
+        $normalized_snippet  = octopus_ai_normalize_text_for_compare($snippet);
+
+        if ($normalized_question === '' || $normalized_snippet === '') {
+            return 0.0;
+        }
+
+        $keywords = preg_split('/\s+/', $normalized_question, -1, PREG_SPLIT_NO_EMPTY);
+        $keywords = array_filter(
+            array_unique($keywords),
+            static function ($keyword) {
+                return strlen($keyword) >= 3;
+            }
+        );
+
+        $score = 0.0;
+        $normalized_url = $url !== '' ? octopus_ai_normalize_text_for_compare($url) : '';
+
+        foreach ($keywords as $keyword) {
+            $occurrences = substr_count($normalized_snippet, $keyword);
+            if ($occurrences > 0) {
+                $score += 6 * $occurrences;
+            }
+
+            if ($normalized_url !== '' && strpos($normalized_url, $keyword) !== false) {
+                $score += 2.0;
+            }
+        }
+
+        similar_text($normalized_snippet, $normalized_question, $percentage_match);
+        $score += (float) $percentage_match;
+
+        if ($snippet !== '' && substr_count($snippet, '.') >= 1) {
+            $score += 1.0;
+        }
+
+        return $score;
+    }
+}
+
 /**
  * Combineert live handleidingstekst voor gebruik als extra context.
  *
  * @param array  $metadata_chunks
  * @param string $lang
- * @return array{text:string, sources:array<int,string>, errors:array<int,array{url:string,status:int,error:string}>}
+ * @param string $question
+ * @return array{
+ *     text:string,
+ *     sources:array<int,string>,
+ *     errors:array<int,array{url:string,status:int,error:string}>,
+ *     best_source:string,
+ *     best_score:float,
+ *     snippets:array<int,string>
+ * }
  */
-function octopus_ai_fetch_live_manual_context(array $metadata_chunks, $lang)
+function octopus_ai_fetch_live_manual_context(array $metadata_chunks, $lang, $question = '')
 {
     $urls = octopus_ai_build_manual_urls($metadata_chunks, $lang);
     if (empty($urls)) {
         return [
             'text'    => '',
             'sources' => [],
+            'best_source' => '',
+            'best_score'  => 0.0,
+            'snippets' => [],
             'errors'  => [],
         ];
     }
 
-    $snippets = [];
-    $errors   = [];
+    $scored_snippets = [];
+    $errors          = [];
+    $order           = 0;
 
     foreach ($urls as $url) {
         $result = octopus_ai_download_manual_page($url);
@@ -271,7 +354,17 @@ function octopus_ai_fetch_live_manual_context(array $metadata_chunks, $lang)
         if ($result['status'] === 200 && $result['body'] !== '') {
             $snippet = octopus_ai_normalize_manual_text($result['body']);
             if ($snippet !== '') {
-                $snippets[] = sprintf("Bron: %s\n%s", $url, $snippet);
+                $score = $question !== ''
+                    ? octopus_ai_score_manual_snippet($question, $snippet, $url)
+                    : 0.0;
+
+                $scored_snippets[] = [
+                    'url'     => $url,
+                    'text'    => sprintf("Bron: %s\n%s", $url, $snippet),
+                    'snippet' => $snippet,
+                    'score'   => $score,
+                    'order'   => $order,
+                ];
             }
         } elseif ($result['status'] === 403) {
             $errors[] = [
@@ -286,20 +379,48 @@ function octopus_ai_fetch_live_manual_context(array $metadata_chunks, $lang)
                 'error'  => $result['error'],
             ];
         }
-
-        if (count($snippets) >= 2) {
-            break;
-        }
+        $order++;
     }
 
+    if (empty($scored_snippets)) {
+        return [
+            'text'    => '',
+            'sources' => [],
+            'best_source' => '',
+            'best_score'  => 0.0,
+            'snippets'    => [],
+            'errors'  => $errors,
+        ];
+    }
+
+    usort(
+        $scored_snippets,
+        static function ($a, $b) {
+            if ($a['score'] === $b['score']) {
+                return $a['order'] <=> $b['order'];
+            }
+
+            return ($b['score'] <=> $a['score']);
+        }
+    );
+
+    $best = $scored_snippets[0];
+
     return [
-        'text'    => implode("\n\n", $snippets),
+        'text'    => $best['text'],
         'sources' => array_map(
-            static function ($snippet) {
-                $parts = explode("\n", $snippet, 2);
-                return isset($parts[0]) ? trim(str_replace('Bron: ', '', $parts[0])) : '';
+            static function ($item) {
+                return $item['url'];
             },
-            $snippets
+            $scored_snippets
+        ),
+        'best_source' => $best['url'],
+        'best_score'  => (float) $best['score'],
+        'snippets'    => array_map(
+            static function ($item) {
+                return $item['text'];
+            },
+            $scored_snippets
         ),
         'errors'  => $errors,
     ];

@@ -30,13 +30,16 @@ if (!function_exists('octopus_ai_get_manual_mode')) {
 }
 
 if (!function_exists('octopus_ai_fetch_live_manual_context')) {
-    function octopus_ai_fetch_live_manual_context($metadata_chunks, $lang)
+    function octopus_ai_fetch_live_manual_context($metadata_chunks, $lang, $question = '')
     {
         error_log('[Octopus AI] Live manual helper ontbreekt, live-context wordt overgeslagen.');
 
         return [
             'text'    => '',
             'sources' => [],
+            'best_source' => '',
+            'best_score'  => 0.0,
+            'snippets'    => [],
             'errors'  => [],
         ];
     }
@@ -240,6 +243,8 @@ EOT;
     $relevantFound = false;
     $live_context = '';
     $live_sources = [];
+    $live_best_source = '';
+    $live_best_score  = 0.0;
 
     if ($use_local_chunks && function_exists('octopus_ai_retrieve_relevant_chunks')) {
         $result = octopus_ai_retrieve_relevant_chunks($message);
@@ -269,12 +274,21 @@ EOT;
     }
 
     if ($use_live_manual) {
-        $live_manual = octopus_ai_fetch_live_manual_context($metadata_chunks, $lang);
+        $live_manual = octopus_ai_fetch_live_manual_context($metadata_chunks, $lang, $message);
         if (is_array($live_manual)) {
             $live_context = isset($live_manual['text']) ? trim((string) $live_manual['text']) : '';
             $live_sources = isset($live_manual['sources']) && is_array($live_manual['sources'])
                 ? array_values(array_filter($live_manual['sources']))
                 : [];
+            $live_best_source = isset($live_manual['best_source'])
+                ? esc_url_raw((string) $live_manual['best_source'])
+                : '';
+            $live_best_score = isset($live_manual['best_score'])
+                ? (float) $live_manual['best_score']
+                : 0.0;
+            if (!empty($live_best_source)) {
+                $live_sources = array_values(array_unique(array_merge([$live_best_source], $live_sources)));
+            }
 
             if ($live_context !== '') {
                 $relevantFound = true;
@@ -340,46 +354,73 @@ EOT;
     $system_prompt .= "\n\nOpmerking:\nAls de gebruiker bevestigt dat hij verder geholpen wil worden (bijv. zegt 'ja'), geef dan een inhoudelijk vervolg op het onderwerp, niet een algemene begroeting of herstart.";
 
     // 📄 Links toevoegen
-    $validLinkFound  = false;
-    $primary_doc_url = '';
+    $validLinkFound      = false;
+    $primary_doc_url     = '';
+    $best_metadata_link  = '';
+    $best_metadata_score = -1.0;
     if (!empty($metadata_chunks)) {
         $system_prompt .= "\n\nDeze informatie komt uit de volgende onderdelen:\n";
         foreach ($metadata_chunks as $meta) {
-            $title = sanitize_text_field($meta['section_title'] ?? '');
-            $slug  = sanitize_text_field($meta['page_slug'] ?? '');
-            $source_url = isset($meta['source_url']) ? esc_url_raw($meta['source_url']) : '';
+            $title        = sanitize_text_field($meta['section_title'] ?? '');
+            $slug         = sanitize_text_field($meta['page_slug'] ?? '');
+            $source_url   = isset($meta['source_url']) ? esc_url_raw($meta['source_url']) : '';
+            $current_score = isset($meta['score']) ? (float) $meta['score'] : 0.0;
 
             $possible_links = [];
             if ($slug) {
-                $doc_url = "https://login.octopus.be/manual/{$lang}/{$slug}";
-                if (octopus_ai_is_valid_url($doc_url)) {
-                    $possible_links[] = $doc_url;
-                    if (!$validLinkFound) {
-                        $primary_doc_url = $doc_url;
-                    }
-                    $validLinkFound = true;
+                $doc_url      = "https://login.octopus.be/manual/{$lang}/{$slug}";
+                $doc_is_valid = octopus_ai_is_valid_url($doc_url);
+                if ($doc_is_valid) {
+                    $possible_links[] = [
+                        'url'       => $doc_url,
+                        'is_manual' => true,
+                        'is_valid'  => true,
+                    ];
                 }
             }
 
-            if ($source_url && !in_array($source_url, $possible_links, true)) {
-                $source_is_valid = octopus_ai_is_valid_url($source_url);
-                if ($source_is_valid || in_array($source_url, $live_sources, true)) {
-                    $possible_links[] = $source_url;
-                    if (!$validLinkFound && $source_is_valid) {
-                        $primary_doc_url = $source_url;
-                        $validLinkFound = true;
+            if ($source_url) {
+                $existing_urls = array_map(
+                    static function ($link_info) {
+                        return $link_info['url'];
+                    },
+                    $possible_links
+                );
+
+                if (!in_array($source_url, $existing_urls, true)) {
+                    $source_is_valid = octopus_ai_is_valid_url($source_url);
+                    $from_live       = in_array($source_url, $live_sources, true);
+                    if ($source_is_valid || $from_live) {
+                        $possible_links[] = [
+                            'url'       => $source_url,
+                            'is_manual' => strpos($source_url, 'octopus.be/manual') !== false,
+                            'is_valid'  => $source_is_valid || $from_live,
+                        ];
                     }
                 }
             }
 
             if ($title && !empty($possible_links)) {
                 $system_prompt .= "- *{$title}*\n";
-                foreach ($possible_links as $link) {
+                foreach ($possible_links as $link_info) {
+                    $link  = $link_info['url'];
                     $label = ($lang === 'FR') ? 'Voir dans le manuel' : 'Bekijk dit in de handleiding';
-                    if ($link && strpos($link, 'octopus.be/manual') === false) {
+                    if ($link && !$link_info['is_manual']) {
                         $label = ($lang === 'FR') ? 'Voir la source' : 'Bekijk de bron';
                     }
+
                     $system_prompt .= "  [{$label}]({$link})\n";
+
+                    if ($link_info['is_valid']) {
+                        if (
+                            $current_score > $best_metadata_score ||
+                            ($current_score === $best_metadata_score && $best_metadata_link === '')
+                        ) {
+                            $best_metadata_score = $current_score;
+                            $best_metadata_link  = $link;
+                        }
+                        $validLinkFound = true;
+                    }
                 }
             }
         }
@@ -396,9 +437,22 @@ EOT;
         }
     }
 
-    if (!$validLinkFound && empty($primary_doc_url) && !empty($live_sources)) {
+    $preferred_doc_url = $best_metadata_link;
+    if (!empty($live_best_source)) {
+        $preferred_doc_url = (
+            $preferred_doc_url === '' ||
+            $live_best_score > $best_metadata_score + 0.01
+        ) ? $live_best_source : $preferred_doc_url;
+    }
+
+    if ($preferred_doc_url !== '') {
+        $primary_doc_url = $preferred_doc_url;
+        $validLinkFound  = true;
+    }
+
+    if ($primary_doc_url === '' && !empty($live_sources)) {
         $primary_doc_url = $live_sources[0];
-        if ($primary_doc_url) {
+        if ($primary_doc_url !== '') {
             $validLinkFound = true;
         }
     }
