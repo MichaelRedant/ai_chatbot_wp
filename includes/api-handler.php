@@ -17,6 +17,15 @@ if (!function_exists('octopus_ai_get_manual_mode') || !function_exists('octopus_
 if (!function_exists('octopus_ai_get_manual_mode')) {
     function octopus_ai_get_manual_mode()
     {
+        $strategy = get_option('octopus_ai_source_strategy', '');
+        if ($strategy === 'live_manual') {
+            return 'live';
+        }
+
+        if (in_array($strategy, ['manual_upload', 'sitemap_online'], true)) {
+            return 'local';
+        }
+
         $mode = get_option('octopus_ai_manual_mode', 'hybrid');
         $allowed = ['local', 'hybrid', 'live'];
 
@@ -155,6 +164,10 @@ function octopus_ai_chatbot_callback($request)
     }
 
     $manual_mode = octopus_ai_get_manual_mode();
+    $source_strategy = get_option('octopus_ai_source_strategy', '');
+    if ($source_strategy === '') {
+        $source_strategy = ($manual_mode === 'live') ? 'live_manual' : 'manual_upload';
+    }
     $use_live_manual = in_array($manual_mode, ['live', 'hybrid'], true);
     $use_local_chunks = $manual_mode !== 'live';
 
@@ -247,6 +260,7 @@ EOT;
     $model = get_option('octopus_ai_model', 'gpt-4.1-mini');
     $context = '';
     $metadata_chunks = [];
+    $metadata_chunks_for_live = [];
     $relevantFound = false;
     $live_context = '';
     $live_sources = [];
@@ -254,35 +268,42 @@ EOT;
     $live_best_score  = 0.0;
     $reference_candidates = [];
 
-    if ($use_local_chunks && function_exists('octopus_ai_retrieve_relevant_chunks')) {
-        $result = octopus_ai_retrieve_relevant_chunks($message);
-        $context = $result['context'] ?? '';
+    if (function_exists('octopus_ai_retrieve_relevant_chunks')) {
+        if ($use_local_chunks) {
+            $result = octopus_ai_retrieve_relevant_chunks($message);
+            $context = $result['context'] ?? '';
 
-        if (isset($result['metadata']['chunks']) && is_array($result['metadata']['chunks'])) {
-            $metadata_chunks = $result['metadata']['chunks'];
-        } elseif (isset($result['metadatas']) && is_array($result['metadatas'])) {
-            $metadata_chunks = $result['metadatas'];
-        } elseif (isset($result['metas']) && is_array($result['metas'])) {
-            $metadata_chunks = $result['metas'];
-        }
+            if (isset($result['metadata']['chunks']) && is_array($result['metadata']['chunks'])) {
+                $metadata_chunks = $result['metadata']['chunks'];
+            } elseif (isset($result['metadatas']) && is_array($result['metadatas'])) {
+                $metadata_chunks = $result['metadatas'];
+            } elseif (isset($result['metas']) && is_array($result['metas'])) {
+                $metadata_chunks = $result['metas'];
+            }
 
-        if (!empty($context) && strlen($context) > 20) {
-            $relevantFound = true;
-        }
-    } elseif (function_exists('octopus_ai_retrieve_relevant_chunks')) {
-        // We gebruiken de metadata nog steeds om live bronnen te bepalen in live-modus.
-        $result = octopus_ai_retrieve_relevant_chunks($message);
-        if (isset($result['metadata']['chunks']) && is_array($result['metadata']['chunks'])) {
-            $metadata_chunks = $result['metadata']['chunks'];
-        } elseif (isset($result['metadatas']) && is_array($result['metadatas'])) {
-            $metadata_chunks = $result['metadatas'];
-        } elseif (isset($result['metas']) && is_array($result['metas'])) {
-            $metadata_chunks = $result['metas'];
+            $metadata_chunks_for_live = $metadata_chunks;
+
+            if (!empty($context) && strlen($context) > 20) {
+                $relevantFound = true;
+            }
+        } else {
+            $result = octopus_ai_retrieve_relevant_chunks($message);
+            if (isset($result['metadata']['chunks']) && is_array($result['metadata']['chunks'])) {
+                $metadata_chunks_for_live = $result['metadata']['chunks'];
+            } elseif (isset($result['metadatas']) && is_array($result['metadatas'])) {
+                $metadata_chunks_for_live = $result['metadatas'];
+            } elseif (isset($result['metas']) && is_array($result['metas'])) {
+                $metadata_chunks_for_live = $result['metas'];
+            }
+
+            if ($source_strategy !== 'live_manual') {
+                $metadata_chunks = $metadata_chunks_for_live;
+            }
         }
     }
 
     if ($use_live_manual) {
-        $live_manual = octopus_ai_fetch_live_manual_context($metadata_chunks, $lang, $message);
+        $live_manual = octopus_ai_fetch_live_manual_context($metadata_chunks_for_live, $lang, $message);
         if (is_array($live_manual)) {
             $live_context = isset($live_manual['text']) ? trim((string) $live_manual['text']) : '';
             $live_sources = isset($live_manual['sources']) && is_array($live_manual['sources'])
