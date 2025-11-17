@@ -176,6 +176,8 @@ Ne mentionne jamais l’IA, GPT ou toute technologie similaire
 
 Aucune supposition ou invention : reste factuel et précis
 
+Ne t’appuie que sur les chunks fournis et sur les pages du manuel autorisées.
+
 🚫 Limitations
 
 Répond uniquement si un contexte pertinent est disponible
@@ -191,6 +193,8 @@ Si l’utilisateur répond par « oui », « ok » ou confirme, continue avec le
 📄 Si possible
 
 Ajoute la mention : « 📄 Voir dans le manuel » avec un lien valide lorsque c’est pertinent
+
+Termine en partageant la liste des trois pages du manuel les plus pertinentes.
 
 Contexte :
 EOT;
@@ -221,6 +225,9 @@ Je bent een AI-chatbot die klanten professioneel, duidelijk en kort helpt bij he
 📄 Indien beschikbaar:
 - Voeg onderaan toe: “📄 Bekijk dit in de handleiding” met een juiste link
 
+Gebruik alleen informatie uit de gedeelde context en de toegestane handleiding-URL’s.
+Sluit af met een opsomming van de drie meest relevante handleidinglinks.
+
 Context:
 EOT;
 }
@@ -245,6 +252,7 @@ EOT;
     $live_sources = [];
     $live_best_source = '';
     $live_best_score  = 0.0;
+    $reference_candidates = [];
 
     if ($use_local_chunks && function_exists('octopus_ai_retrieve_relevant_chunks')) {
         $result = octopus_ai_retrieve_relevant_chunks($message);
@@ -280,6 +288,12 @@ EOT;
             $live_sources = isset($live_manual['sources']) && is_array($live_manual['sources'])
                 ? array_values(array_filter($live_manual['sources']))
                 : [];
+            $live_sources = array_values(array_filter(
+                $live_sources,
+                static function ($url) use ($lang) {
+                    return octopus_ai_is_allowed_manual_url($url, $lang);
+                }
+            ));
             $live_best_source = isset($live_manual['best_source'])
                 ? esc_url_raw((string) $live_manual['best_source'])
                 : '';
@@ -369,7 +383,9 @@ EOT;
             $possible_links = [];
             if ($slug) {
                 $doc_url      = "https://login.octopus.be/manual/{$lang}/{$slug}";
-                $doc_is_valid = octopus_ai_is_valid_url($doc_url);
+                $doc_is_valid = octopus_ai_is_allowed_manual_url($doc_url, $lang)
+                    ? octopus_ai_is_valid_url($doc_url)
+                    : false;
                 if ($doc_is_valid) {
                     $possible_links[] = [
                         'url'       => $doc_url,
@@ -379,7 +395,7 @@ EOT;
                 }
             }
 
-            if ($source_url) {
+            if ($source_url && octopus_ai_is_allowed_manual_url($source_url, $lang)) {
                 $existing_urls = array_map(
                     static function ($link_info) {
                         return $link_info['url'];
@@ -420,20 +436,37 @@ EOT;
                             $best_metadata_link  = $link;
                         }
                         $validLinkFound = true;
+
+                        $reference_title = $title;
+                        if ($reference_title === '' && $slug !== '') {
+                            $reference_title = ucwords(str_replace(['-', '_'], ' ', pathinfo($slug, PATHINFO_FILENAME)));
+                        }
+
+                        $reference_candidates[] = [
+                            'title' => $reference_title,
+                            'url'   => $link,
+                            'score' => $current_score,
+                        ];
                     }
                 }
             }
         }
     }
 
-    if (empty($metadata_chunks) && !empty($live_sources)) {
+    if (!empty($live_sources)) {
         $system_prompt .= "\n\nLive bronnen:\n";
-        foreach ($live_sources as $link) {
+        foreach ($live_sources as $index => $link) {
             $label = ($lang === 'FR') ? 'Voir dans le manuel' : 'Bekijk dit in de handleiding';
             if ($link && strpos($link, 'octopus.be/manual') === false) {
                 $label = ($lang === 'FR') ? 'Voir la source' : 'Bekijk de bron';
             }
             $system_prompt .= "- [{$label}]({$link})\n";
+
+            $reference_candidates[] = [
+                'title' => ($lang === 'FR') ? 'Page du manuel' : 'Handleidingpagina',
+                'url'   => $link,
+                'score' => max(0.1, $live_best_score - ($index * 0.1)),
+            ];
         }
     }
 
@@ -455,6 +488,14 @@ EOT;
         if ($primary_doc_url !== '') {
             $validLinkFound = true;
         }
+    }
+
+    if ($primary_doc_url !== '') {
+        $reference_candidates[] = [
+            'title' => ($lang === 'FR') ? 'Page du manuel' : 'Handleidingpagina',
+            'url'   => $primary_doc_url,
+            'score' => max($best_metadata_score, $live_best_score, 0.1),
+        ];
     }
 
     // ➕ Opbouw history
@@ -545,17 +586,6 @@ $answer = wp_specialchars_decode($answer, ENT_QUOTES);
 $answer = html_entity_decode($answer, ENT_QUOTES | ENT_HTML5, 'UTF-8');
 $answer = octopus_ai_trim_surrounding_quotes($answer);
 
-// ✅ Voeg directe link toe als beschikbaar maar nog niet aanwezig in het antwoord
-if ($primary_doc_url && strpos($answer, $primary_doc_url) === false) {
-    $is_manual = strpos($primary_doc_url, 'octopus.be/manual') !== false;
-    if ($is_manual) {
-        $label = ($lang === 'FR') ? 'Voir dans le manuel' : 'Bekijk dit in de handleiding';
-    } else {
-        $label = ($lang === 'FR') ? 'Voir sur le site' : 'Bekijk dit op de website';
-    }
-    $answer .= "\n\n[$label]($primary_doc_url)";
-}
-
 // ✅ Fallback-zoeklink als geen geldige link gevonden is
 if (
     !$validLinkFound &&
@@ -594,6 +624,54 @@ if (
         $answer = preg_replace("/\n{3,}/", "\n\n", $answer ?? '');
 
         $answer .= "\n\n[$label]($zoeklink)";
+    }
+}
+
+// ✅ Voeg lijst met top 3 referentielinks toe
+if (!empty($reference_candidates)) {
+    usort(
+        $reference_candidates,
+        static function ($a, $b) {
+            $scoreA = isset($a['score']) ? (float) $a['score'] : 0.0;
+            $scoreB = isset($b['score']) ? (float) $b['score'] : 0.0;
+            if ($scoreA === $scoreB) {
+                return 0;
+            }
+            return ($scoreA < $scoreB) ? 1 : -1;
+        }
+    );
+
+    $seen_urls = [];
+    $selected  = [];
+    foreach ($reference_candidates as $candidate) {
+        $url = isset($candidate['url']) ? trim((string) $candidate['url']) : '';
+        if ($url === '' || isset($seen_urls[$url])) {
+            continue;
+        }
+
+        $seen_urls[$url] = true;
+        $selected[] = [
+            'title' => isset($candidate['title']) ? trim((string) $candidate['title']) : '',
+            'url'   => $url,
+        ];
+
+        if (count($selected) >= 3) {
+            break;
+        }
+    }
+
+    if (!empty($selected)) {
+        $heading = ($lang === 'FR') ? 'Liens utiles' : 'Handige links';
+        $answer  = rtrim($answer) . "\n\n{$heading}:\n";
+        foreach ($selected as $ref) {
+            $title = $ref['title'] !== '' ? $ref['title'] : (($lang === 'FR') ? 'Voir dans le manuel' : 'Bekijk dit in de handleiding');
+            $safe_title = sanitize_text_field($title);
+            if ($safe_title === '') {
+                $safe_title = ($lang === 'FR') ? 'Voir dans le manuel' : 'Bekijk dit in de handleiding';
+            }
+            $answer .= sprintf('- [%s](%s)\n', $safe_title, esc_url($ref['url']));
+        }
+        $answer = rtrim($answer);
     }
 }
 

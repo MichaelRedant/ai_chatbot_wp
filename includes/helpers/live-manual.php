@@ -61,6 +61,41 @@ function octopus_ai_get_manual_base_url($lang)
 }
 
 /**
+ * Geeft het toegestane domein voor handleiding-links per taal terug.
+ *
+ * @param string $lang
+ * @return string
+ */
+function octopus_ai_get_allowed_manual_host($lang)
+{
+    $base_url = octopus_ai_get_manual_base_url($lang);
+    $parsed   = wp_parse_url($base_url);
+    $host     = is_array($parsed) && !empty($parsed['host']) ? strtolower($parsed['host']) : '';
+
+    return $host;
+}
+
+/**
+ * Controleert of een URL binnen het toegestane handleiding-domein valt.
+ *
+ * @param string $url
+ * @param string $lang
+ * @return bool
+ */
+function octopus_ai_is_allowed_manual_url($url, $lang)
+{
+    $allowed_host = octopus_ai_get_allowed_manual_host($lang);
+    if ($allowed_host === '') {
+        return false;
+    }
+
+    $parsed = wp_parse_url((string) $url);
+    $host   = is_array($parsed) && !empty($parsed['host']) ? strtolower($parsed['host']) : '';
+
+    return $host !== '' && $host === $allowed_host;
+}
+
+/**
  * Ophalen van handmatig ingestelde prioritaire URL's.
  *
  * @param string $lang
@@ -92,6 +127,10 @@ function octopus_ai_get_manual_priority_urls($lang)
             }
 
             if (function_exists('wp_http_validate_url') && !wp_http_validate_url($candidate)) {
+                continue;
+            }
+
+            if (!octopus_ai_is_allowed_manual_url($candidate, $lang_key)) {
                 continue;
             }
 
@@ -138,6 +177,10 @@ function octopus_ai_build_manual_urls(array $metadata_chunks, $lang)
         foreach ($candidates as $candidate) {
             $candidate = trim($candidate);
             if ($candidate === '') {
+                continue;
+            }
+
+            if (!octopus_ai_is_allowed_manual_url($candidate, $lang)) {
                 continue;
             }
 
@@ -406,14 +449,21 @@ function octopus_ai_fetch_live_manual_context(array $metadata_chunks, $lang, $qu
 
     $best = $scored_snippets[0];
 
-    return [
-        'text'    => $best['text'],
-        'sources' => array_map(
+    $filtered_sources = array_values(array_filter(
+        array_map(
             static function ($item) {
                 return $item['url'];
             },
             $scored_snippets
         ),
+        static function ($url) use ($lang) {
+            return octopus_ai_is_allowed_manual_url($url, $lang);
+        }
+    ));
+
+    return [
+        'text'    => $best['text'],
+        'sources' => $filtered_sources,
         'best_source' => $best['url'],
         'best_score'  => (float) $best['score'],
         'snippets'    => array_map(
