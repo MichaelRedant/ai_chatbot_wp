@@ -8,6 +8,15 @@ if (!defined('ABSPATH')) exit;
  */
 function octopus_ai_get_manual_mode()
 {
+    $strategy = get_option('octopus_ai_source_strategy', '');
+    if ($strategy === 'live_manual') {
+        return 'live';
+    }
+
+    if (in_array($strategy, ['manual_upload', 'sitemap_online'], true)) {
+        return 'local';
+    }
+
     $mode = get_option('octopus_ai_manual_mode', 'hybrid');
     $allowed = ['local', 'hybrid', 'live'];
 
