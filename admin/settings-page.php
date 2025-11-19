@@ -753,6 +753,55 @@ function octopus_ai_settings_page() {
 
             <?php submit_button('Instellingen opslaan'); ?>
         </form>
+    </div>
+        <hr>
+
+        <h2 class="collapsible-heading" onclick="toggleSection(this)">
+    🗂️ Geüploade Bestanden <span class="toggle-arrow">▼</span>
+</h2>
+        <div class="collapsible-content hidden">
+
+        <div class="upload-box">
+    <h3>📄 PDF-handleidingen uploaden</h3>
+    <form method="post" action="<?php echo admin_url('admin-post.php'); ?>" enctype="multipart/form-data">
+        <?php wp_nonce_field('octopus_ai_upload_pdf', 'octopus_ai_pdf_nonce'); ?>
+        <input type="hidden" name="action" value="octopus_ai_pdf_upload">
+        <input type="file" name="octopus_ai_pdf_upload[]" accept="application/pdf" multiple required>
+        <?php submit_button('Upload PDF'); ?>
+    </form>
+</div>
+
+
+        <?php
+        if (isset($_GET['bulk_delete'])) {
+            echo '<div class="notice notice-success is-dismissible"><p>' . intval($_GET['bulk_delete']) . ' bestand(en) succesvol verwijderd.</p></div>';
+        }
+        if (file_exists($upload_path)) {
+            $files = glob($upload_path . '*');
+            if ($files) {
+                echo '<form method="post" action="' . esc_url(admin_url('admin-post.php')) . '">';
+                wp_nonce_field('octopus_ai_bulk_delete', 'octopus_ai_bulk_delete_nonce');
+                echo '<input type="hidden" name="action" value="octopus_ai_bulk_delete">';
+                echo '<ul>';
+                foreach ($files as $file) {
+                    $filename = basename($file);
+                    $delete_url = wp_nonce_url(admin_url('admin-post.php?action=octopus_ai_delete_file&file=' . urlencode($filename)), 'octopus_ai_delete_file');
+                    echo '<li>';
+                    echo '<label><input type="checkbox" name="octopus_ai_files[]" value="' . esc_attr($filename) . '"> ';
+                    echo '<a href="' . esc_url($upload_url . $filename) . '" target="_blank">' . esc_html($filename) . '</a></label> ';
+                    echo '<a href="' . esc_url($delete_url) . '" style="color:red;margin-left:10px;" onclick="return confirm(\'Weet je zeker dat je dit bestand wilt verwijderen?\');">Verwijderen</a>';
+                    echo '</li>';
+                }
+                echo '</ul>';
+                echo '<p><input type="submit" class="button button-secondary" value="Geselecteerde bestanden verwijderen" onclick="return confirm(\'Weet je zeker dat je deze bestanden wilt verwijderen?\');"></p>';
+                echo '</form>';
+            } else {
+                echo '<p>Er zijn nog geen bestanden geüpload.</p>';
+            }
+        } else {
+            echo '<p>Er zijn nog geen bestanden geüpload.</p>';
+        }
+        ?>
 
         <?php
         $sitemap_dir = trailingslashit($upload_dir['basedir']) . 'octopus-chatbot/';

@@ -48,10 +48,10 @@ class Chunker
             $splitChunks = $this->splitTextIntoChunks($text, $this->chunkSize);
             foreach ($splitChunks as $chunkText) {
                 $chunks[] = [
-                    'content' => $chunkText,
+                    'content'  => $chunkText,
                     'metadata' => [
-                        'page_slug' => $pageSlug,
-                        'source_title' => $sourceTitle,
+                        'page_slug'     => $pageSlug,
+                        'source_title'  => $sourceTitle,
                         'original_page' => $pageNumber,
                         'section_title' => $sectionTitle,
                         'source_url' => $pageUrl,

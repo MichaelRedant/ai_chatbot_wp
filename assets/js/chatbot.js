@@ -300,6 +300,11 @@ let selectedTopic = sessionStorage.getItem(topicStorageKey) || '';
     if (closeButton)  closeButton.style.setProperty('color', settings.header_text_color || '#ffffff', 'important');
     if (headerBar)    headerBar.style.setProperty('color', settings.header_text_color || '#ffffff', 'important');
 
+    // ✅ Styling forceren
+    if (headerTitle)  headerTitle.style.setProperty('color', settings.header_text_color || '#ffffff', 'important');
+    if (closeButton)  closeButton.style.setProperty('color', settings.header_text_color || '#ffffff', 'important');
+    if (headerBar)    headerBar.style.setProperty('color', settings.header_text_color || '#ffffff', 'important');
+
     // ✅ Historiek herstellen
     if (sessionStorage.getItem('octopus_chat_history')) {
         chatMessages.innerHTML = sessionStorage.getItem('octopus_chat_history');
