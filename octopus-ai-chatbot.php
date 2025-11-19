@@ -19,7 +19,8 @@ require_once plugin_dir_path(__FILE__) . 'admin/sitemap-handler.php';
 // ✅ Includes
 require_once plugin_dir_path(__FILE__) . 'includes/api-handler.php';
 require_once plugin_dir_path(__FILE__) . 'includes/pdf-parser.php';
-require_once plugin_dir_path(__FILE__) . 'includes/chunker.php';
+// Gebruik de huidige bestandsnaam voor de chunker
+require_once plugin_dir_path(__FILE__) . 'includes/pdf-chunker.php';
 require_once plugin_dir_path(__FILE__) . 'includes/context-retriever.php';
 require_once plugin_dir_path(__FILE__) . 'includes/logger.php';
 require_once plugin_dir_path(__FILE__) . 'includes/sitemap-parser.php';
@@ -48,8 +49,13 @@ function octopus_ai_should_display_chatbot() {
 
 // ✅ Frontend scripts + wp_localize_script met settings
 function octopus_ai_enqueue_frontend_assets() {
-    wp_enqueue_style('octopus-ai-chatbot-style', plugin_dir_url(__FILE__) . 'assets/css/chatbot.css', array(), '1.0');
-    wp_enqueue_script('octopus-ai-chatbot-script', plugin_dir_url(__FILE__) . 'assets/js/chatbot.js', array('jquery'), '1.0', true);
+    $css_path = plugin_dir_path(__FILE__) . 'assets/css/chatbot.css';
+    $js_path  = plugin_dir_path(__FILE__) . 'assets/js/chatbot.js';
+    $css_ver  = file_exists($css_path) ? filemtime($css_path) : '1.0';
+    $js_ver   = file_exists($js_path)  ? filemtime($js_path)  : '1.0';
+
+    wp_enqueue_style('octopus-ai-chatbot-style', plugin_dir_url(__FILE__) . 'assets/css/chatbot.css', array(), $css_ver);
+    wp_enqueue_script('octopus-ai-chatbot-script', plugin_dir_url(__FILE__) . 'assets/js/chatbot.js', array('jquery'), $js_ver, true);
 
     $lang_header = strtolower($_SERVER['HTTP_ACCEPT_LANGUAGE'] ?? '');
     $is_french  = preg_match('#/fr(/|$)#', $_SERVER['REQUEST_URI']) || strpos($lang_header, 'fr') === 0;

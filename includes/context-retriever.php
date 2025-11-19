@@ -8,8 +8,9 @@ if (!defined('ABSPATH')) exit;
  * @param string $question
  * @return string Context string
  */
-function octopus_ai_retrieve_relevant_chunks($question) {
-    $cache_key = 'octopus_ai_chunks_' . md5($question);
+function octopus_ai_retrieve_relevant_chunks($question, $topic = '') {
+    $topic_key = is_string($topic) ? strtolower(trim($topic)) : '';
+    $cache_key = 'octopus_ai_chunks_' . md5($question . '||' . $topic_key);
     $cached = get_transient($cache_key);
     if ($cached && is_array($cached)) return $cached;
 
@@ -40,6 +41,15 @@ function octopus_ai_retrieve_relevant_chunks($question) {
             return iconv('UTF-8', 'ASCII//TRANSLIT', $string);
         }
     };
+
+    // Topic keywords for additional weighting
+    $topic_keywords = [
+        'klantenportaal'    => ['klantenportaal', 'klant', 'portal', 'login', 'factuur', 'betaling', 'support'],
+        'boekhoudprogramma' => ['boekhoud', 'boekhouding', 'boekhoudprogramma', 'btw', 'facturatie', 'journaal', 'balans', 'rapport', 'administratie']
+    ];
+    $topic_terms = $topic_key !== '' && isset($topic_keywords[$topic_key])
+        ? $topic_keywords[$topic_key]
+        : [];
 
     $normalized_question = $normalize(strtolower($question));
     $keywords = preg_split('/\s+/', $normalized_question, -1, PREG_SPLIT_NO_EMPTY);
@@ -89,6 +99,25 @@ function octopus_ai_retrieve_relevant_chunks($question) {
         // Fuzzy match boost: section title
         similar_text($section_title, $normalized_question, $percent2);
         if ($percent2 >= 20) $score += 1;
+
+        // Topic boost: if user selected a topic, add weight when terms appear
+        if (!empty($topic_terms)) {
+            foreach ($topic_terms as $term) {
+                $term = trim($term);
+                if ($term === '') {
+                    continue;
+                }
+                if (strpos($normalized_content, $term) !== false) {
+                    $score += 2;
+                }
+                if ($section_title !== '' && strpos($section_title, $term) !== false) {
+                    $score += 1;
+                }
+                if ($page_slug !== '' && strpos($page_slug, $term) !== false) {
+                    $score += 1;
+                }
+            }
+        }
 
         // ❌ Sla chunk over als die leeg is of geen nuttige inhoud bevat
         $clean = $content;

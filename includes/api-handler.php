@@ -270,7 +270,7 @@ EOT;
 
     if (function_exists('octopus_ai_retrieve_relevant_chunks')) {
         if ($use_local_chunks) {
-            $result = octopus_ai_retrieve_relevant_chunks($message);
+            $result = octopus_ai_retrieve_relevant_chunks($message, $topic);
             $context = $result['context'] ?? '';
 
             if (isset($result['metadata']['chunks']) && is_array($result['metadata']['chunks'])) {
@@ -287,7 +287,7 @@ EOT;
                 $relevantFound = true;
             }
         } else {
-            $result = octopus_ai_retrieve_relevant_chunks($message);
+            $result = octopus_ai_retrieve_relevant_chunks($message, $topic);
             if (isset($result['metadata']['chunks']) && is_array($result['metadata']['chunks'])) {
                 $metadata_chunks_for_live = $result['metadata']['chunks'];
             } elseif (isset($result['metadatas']) && is_array($result['metadatas'])) {
@@ -591,6 +591,33 @@ $emoji_blacklist = [
     '🛠️','🪄','🧹','🪪','🗑️','⏳','⌛','🔧','👎','👍'
 ];
 $answer = str_replace($emoji_blacklist, '', $answer);
+
+    // Links sanitiseren: enkel toegestane handleiding-URL's doorlaten
+    $answer = preg_replace_callback(
+        '/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/',
+        function ($m) use ($lang) {
+            $text = sanitize_text_field($m[1]);
+            $url  = esc_url_raw($m[2]);
+            if (!octopus_ai_is_allowed_manual_url($url, $lang) || !octopus_ai_is_valid_url($url)) {
+                return $text; // verwijder ongeldige link, behoud tekst
+            }
+            return '[' . $text . '](' . $url . ')';
+        },
+        $answer ?? ''
+    );
+
+    // Kale URLs die niet toegelaten zijn verwijderen; toegelaten behouden
+    $answer = preg_replace_callback(
+        '/\bhttps?:\/\/[^\s)]+/i',
+        function ($m) use ($lang) {
+            $url = esc_url_raw($m[0]);
+            if (!octopus_ai_is_allowed_manual_url($url, $lang) || !octopus_ai_is_valid_url($url)) {
+                return '';
+            }
+            return $url;
+        },
+        $answer ?? ''
+    );
 
 // ✅ Dode links naar de handleiding weghalen (optioneel: kan zwaar zijn als er veel zijn)
 $answer = preg_replace_callback(
