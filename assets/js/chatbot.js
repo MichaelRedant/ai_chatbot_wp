@@ -1,17 +1,4 @@
 document.addEventListener('DOMContentLoaded', function () {
-
-    // ✅ Dynamische instellingen ophalen
-    fetch(octopus_ai_chatbot_vars.ajaxurl + '?action=octopus_ai_get_settings')
-        .then(response => response.json())
-        .then(response => {
-            if (response.success) {
-                const settings = response.data;
-                document.documentElement.style.setProperty('--primary-color', settings.primary_color);
-                document.querySelector('#chat-header').innerText = settings.brand_name;
-            }
-        })
-        .catch(error => console.error('Instellingen laden mislukt', error));
-
     // ✅ Toggle knop
     const toggleButton = document.createElement('div');
     toggleButton.id = 'octopus-chat-toggle';
@@ -21,57 +8,354 @@ document.addEventListener('DOMContentLoaded', function () {
     // ✅ Chatvenster
     const chatbot = document.createElement('div');
     chatbot.id = 'octopus-chatbot';
-    chatbot.innerHTML = `
-    <div id="chat-header">
-        ${octopus_ai_chatbot_vars.brand_name || 'AI Chatbot'}
-        <button id="chat-close" aria-label="Sluiten" style="cursor:pointer;font-size:18px;background:none;border:none;color:white;margin-left:auto;">&times;</button>
-    </div>
-    <div id="chat-messages"></div>
-    <div id="chat-input-container">
-        <input type="text" id="chat-input" placeholder="Typ je vraag..." />
-        <button id="chat-send">Verstuur</button>
-    </div>
-`;
-
-    // ✅ Branding footer
-    const poweredBy = document.createElement('div');
-    poweredBy.id = 'octopus-chat-powered-by';
-    poweredBy.innerHTML = `<small>Powered by <a href="https://www.xinudesign.be" target="_blank" style="color:#999; text-decoration:none;">Xinudesign</a></small>`;
-    chatbot.appendChild(poweredBy);
-
     document.body.appendChild(chatbot);
 
+    const path = window.location.pathname;
+    const isHome = path === '/' || path === '/index.php' || path === '/fr/';
+    if (isHome) {
+        setTimeout(() => {
+            if (!window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+                toggleButton.classList.add('pop-highlight');
+                setTimeout(() => toggleButton.classList.remove('pop-highlight'), 800);
+            }
+        }, 2000);
+    }
+
+    const settings = octopus_ai_chatbot_vars;
+const fallbackTrigger = settings.i18n.fallback_trigger || "Sorry, daar kan ik je niet mee helpen.";
+
+    let lang = octopus_ai_chatbot_vars.lang;
+if (!lang || lang === '') {
+    const browserLang = navigator.language || navigator.userLanguage || 'nl';
+    lang = browserLang.toLowerCase().startsWith('fr') ? 'FR' : 'NL';
+}
+
+const topicChoices = [
+    {
+        key: 'klantenportaal',
+        labelNl: 'Klantenportaal',
+        labelFr: 'Portail client',
+        descNl: 'Vragen over facturen, betalingen of support via het klantenportaal.',
+        descFr: 'Questions sur les factures, paiements ou support dans le portail client.'
+    },
+    {
+        key: 'boekhoudprogramma',
+        labelNl: 'Boekhoudprogramma',
+        labelFr: 'Logiciel de comptabilité',
+        descNl: 'Vragen over boekhouding, btw of rapportages binnen het boekhoudprogramma.',
+        descFr: 'Questions sur la comptabilité, la TVA ou les rapports dans le logiciel.'
+    }
+];
+
+const topicStorageKey = `octopus_chat_topic_${lang}`;
+const welcomeSessionKey = `octopus_chat_welcomed_${lang}`;
+let selectedTopic = sessionStorage.getItem(topicStorageKey) || '';
+
+
+    let sendCooldown = false;
+
+    function decodeUnicode(str) {
+        return str
+            .replace(/\\u([0-9a-fA-F]{4})/g, (_, hex) => String.fromCharCode(parseInt(hex, 16)))
+            .replace(/\u([0-9a-fA-F]{4})/g, (_, hex) => String.fromCharCode(parseInt(hex, 16)));
+    }
+
+    function stripWrappingQuotes(str) {
+        if (!str) {
+            return str;
+        }
+
+        const trimmed = str.trim();
+        const pairs = [
+            ['"', '"'],
+            ['“', '”'],
+            ['„', '“'],
+            ['«', '»']
+        ];
+
+        for (const [open, close] of pairs) {
+            if (trimmed.startsWith(open) && trimmed.endsWith(close)) {
+                return trimmed.slice(open.length, trimmed.length - close.length).trim();
+            }
+        }
+
+        return trimmed;
+    }
+    
+    function getTopicMeta(key) {
+        return topicChoices.find(choice => choice.key === key) ?? null;
+    }
+
+    function getTopicLabel(choice) {
+        if (!choice) return '';
+        return lang === 'FR' ? choice.labelFr : choice.labelNl;
+    }
+
+    function getTopicDescription(choice) {
+        if (!choice) return '';
+        return lang === 'FR' ? choice.descFr : choice.descNl;
+    }
+
+    // ✅ CSS-variabelen instellen
+    document.documentElement.style.setProperty('--primary-color', settings.primary_color);
+    document.documentElement.style.setProperty('--header-text-color', settings.header_text_color || '#ffffff');
+
+    // ✅ HTML injecteren
+    chatbot.innerHTML = `
+        <div id="chat-header" style="background-color:${settings.primary_color};">
+            <div class="chat-header-inner">
+                <div class="chat-logo-glass">
+                    <img src="${settings.logo_url}" alt="Logo" class="chat-logo">
+                </div>
+                <span class="chat-header-title">${settings.brand_name || 'AI Chatbot'}</span>
+            </div>
+            <button id="chat-close" aria-label="Sluiten" class="chat-close-button">&times;</button>
+        </div>
+        <div id="chat-messages"></div>
+        <button id="chat-reset" class="chat-reset-button" title="${settings.i18n.reset_title || 'Reset'}">🔄 ${settings.i18n.reset_button || 'Vernieuw'}</button>
+
+
+        <div id="chat-input-container">
+            <input type="text" id="chat-input" placeholder="Typ je vraag..." />
+            <button id="chat-send">Verstuur</button>
+        </div>
+    `;
+
+    // ✅ DOM-elementen ophalen
+    const headerTitle  = chatbot.querySelector('.chat-header-title');
+    const closeButton  = chatbot.querySelector('.chat-close-button');
+    const headerBar    = chatbot.querySelector('#chat-header');
     const chatMessages = document.getElementById('chat-messages');
     const chatInput    = document.getElementById('chat-input');
     const chatSend     = document.getElementById('chat-send');
     const chatClose    = document.getElementById('chat-close');
+    const chatInputContainer = document.getElementById('chat-input-container');
+
+    const topicIntroText = lang === 'FR'
+        ? 'Souhaitez-vous poser une question sur le portail client ou le logiciel comptable ?'
+        : 'Heb je een vraag over het klantenportaal of het boekhoudprogramma?';
+
+    const topicGridHtml = topicChoices.map(choice => `
+        <button type="button" class="topic-option" data-topic="${choice.key}">
+            <span class="topic-option-title">${getTopicLabel(choice)}</span>
+            <span class="topic-option-description">${getTopicDescription(choice)}</span>
+        </button>
+    `).join('');
+
+    const topicPanel = document.createElement('section');
+    topicPanel.id = 'chat-topic-panel';
+    topicPanel.innerHTML = `
+        <div class="topic-panel-inner">
+            <p class="topic-intro">${topicIntroText}</p>
+            <div class="topic-grid">
+                ${topicGridHtml}
+            </div>
+        </div>
+    `;
+    chatbot.insertBefore(topicPanel, chatMessages);
+
+    const topicStatus = document.createElement('div');
+    topicStatus.id = 'chat-topic-status';
+    topicStatus.innerHTML = `
+        <span class="topic-status-label"></span>
+        <button type="button" class="topic-change-button">${lang === 'FR' ? 'Changer' : 'Wijzig'}</button>
+    `;
+    chatbot.insertBefore(topicStatus, chatInputContainer);
+    topicStatus.classList.add('is-hidden');
+
+    const topicStatusLabel = topicStatus.querySelector('.topic-status-label');
+    const topicChangeButton = topicStatus.querySelector('.topic-change-button');
+    const topicOptions = topicPanel.querySelectorAll('.topic-option');
+
+    const headerInner = chatbot.querySelector('.chat-header-inner');
+    const topicBadge = document.createElement('button');
+    topicBadge.id = 'chat-topic-badge';
+    topicBadge.type = 'button';
+    topicBadge.className = 'chat-topic-badge';
+    topicBadge.addEventListener('click', () => topicPanel.classList.toggle('visible'));
+    headerInner.appendChild(topicBadge);
+
+    topicChangeButton.addEventListener('click', (e) => {
+        e.preventDefault();
+        topicPanel.classList.add('visible');
+    });
+
+    topicOptions.forEach(option => {
+        if (option.dataset.topic === selectedTopic) {
+            option.classList.add('is-selected');
+        }
+        option.addEventListener('click', () => setTopic(option.dataset.topic));
+    });
+
+    function updateTopicBadge() {
+        const meta = getTopicMeta(selectedTopic);
+        const fallbackLabel = lang === 'FR' ? 'Choisir un sujet' : 'Kies een onderwerp';
+        const label = meta ? getTopicLabel(meta) : fallbackLabel;
+        topicBadge.textContent = label;
+        const ariaLabel = meta
+            ? (lang === 'FR' ? `Sujet actuel : ${getTopicLabel(meta)}` : `Huidig onderwerp: ${getTopicLabel(meta)}`)
+            : fallbackLabel;
+        topicBadge.setAttribute('aria-label', ariaLabel);
+    }
+
+    function updateTopicStatus() {
+        const meta = getTopicMeta(selectedTopic);
+        if (!meta) {
+            topicStatus.classList.add('is-hidden');
+            return;
+        }
+        topicStatus.classList.remove('is-hidden');
+        const label = getTopicLabel(meta);
+        topicStatusLabel.textContent = lang === 'FR'
+            ? `Vous consultez les réponses pour ${label}.`
+            : `Ik zoek antwoorden over ${label}.`;
+    }
+
+    function updateInputState() {
+        const ready = selectedTopic !== '';
+        chatInput.disabled = !ready;
+        chatSend.disabled = !ready;
+        chatInput.placeholder = ready
+            ? (settings.i18n.placeholder || 'Typ je vraag...')
+            : (lang === 'FR' ? "Choisis d'abord un sujet..." : 'Kies eerst een onderwerp...');
+        chatInput.classList.toggle('input-disabled', !ready);
+    }
+
+    function announceTopic(meta, previousTopic) {
+        const label = getTopicLabel(meta);
+        if (!label) {
+            return;
+        }
+        let message;
+        if (lang === 'FR') {
+            message = previousTopic
+                ? `Je bascule vers le sujet **${label}**. Pose ta question quand tu veux.`
+                : `Merci ! Je vais chercher les réponses pour **${label}**.`;
+        } else {
+            message = previousTopic
+                ? `Ik schakel over naar **${label}**. Stel gerust je volgende vraag.`
+                : `Top! Ik zoek vanaf nu antwoorden over **${label}**.`;
+        }
+        addMessage(message, 'bot');
+        saveChatHistory();
+    }
+
+    function setTopic(topicKey, announce = true) {
+        const meta = getTopicMeta(topicKey);
+        if (!meta) {
+            return;
+        }
+        const previousTopic = selectedTopic;
+        if (previousTopic === topicKey) {
+            topicPanel.classList.remove('visible');
+            return;
+        }
+        selectedTopic = topicKey;
+        sessionStorage.setItem(topicStorageKey, topicKey);
+        topicOptions.forEach(option => {
+            option.classList.toggle('is-selected', option.dataset.topic === topicKey);
+        });
+        updateTopicBadge();
+        updateTopicStatus();
+        updateInputState();
+        topicPanel.classList.remove('visible');
+        chatInput.focus({ preventScroll: true });
+        if (announce) {
+            announceTopic(meta, previousTopic);
+        }
+    }
+
+    updateTopicBadge();
+    updateTopicStatus();
+    updateInputState();
+
+    if (selectedTopic) {
+        topicOptions.forEach(option => {
+            option.classList.toggle('is-selected', option.dataset.topic === selectedTopic);
+        });
+    } else {
+        topicPanel.classList.add('visible');
+    }
+
+    document.addEventListener('click', (event) => {
+        if (!topicPanel.classList.contains('visible')) {
+            return;
+        }
+        if (event.target === topicBadge || topicBadge.contains(event.target)) {
+            return;
+        }
+        if (!topicPanel.contains(event.target) && !topicChangeButton.contains(event.target)) {
+            topicPanel.classList.remove('visible');
+        }
+    });
+
+    document.addEventListener('keydown', (event) => {
+        if (event.key === 'Escape') {
+            topicPanel.classList.remove('visible');
+        }
+    });
+
+    // ✅ Styling forceren
+    if (headerTitle)  headerTitle.style.setProperty('color', settings.header_text_color || '#ffffff', 'important');
+    if (closeButton)  closeButton.style.setProperty('color', settings.header_text_color || '#ffffff', 'important');
+    if (headerBar)    headerBar.style.setProperty('color', settings.header_text_color || '#ffffff', 'important');
 
     // ✅ Historiek herstellen
     if (sessionStorage.getItem('octopus_chat_history')) {
         chatMessages.innerHTML = sessionStorage.getItem('octopus_chat_history');
     }
 
-    // ✅ Open chatbot
+    // ✅ Openen
    toggleButton.addEventListener('click', () => {
     chatbot.classList.remove('fade-out');
     chatbot.classList.add('fade-in');
     chatbot.style.display = 'flex';
     toggleButton.style.display = 'none';
 
-    // Welkomstbericht tonen
-    if (octopus_ai_chatbot_vars.welcome_message && !sessionStorage.getItem('octopus_chat_welcomed')) {
+    if (!sessionStorage.getItem(welcomeSessionKey)) {
+        let welcome = settings.welcome_message;
+        if (!welcome || welcome.trim() === '') {
+            welcome = (lang === 'FR')
+                ? "👋 Bonjour ! Comment puis-je t’aider aujourd’hui ?"
+                : "👋 Hallo! Hoe kan ik je vandaag helpen?";
+        }
+
         setTimeout(() => {
-            addMessage(octopus_ai_chatbot_vars.welcome_message, 'bot', { isWelcome: true });
+            addMessage(welcome, 'bot', { isWelcome: true });
             saveChatHistory();
-            sessionStorage.setItem('octopus_chat_welcomed', 'true');
+            sessionStorage.setItem(welcomeSessionKey, 'true');
         }, 300);
     }
 });
 
-    // ✅ Sluiten via X
+    // ✅ Sluiten
     chatClose.addEventListener('click', closeChatbot);
+    const chatReset = document.getElementById('chat-reset');
+    chatReset.innerHTML = `🔄 ${settings.i18n.reset_button || 'Vernieuw'}`;
+chatSend.textContent  = settings.i18n.send;
+chatReset.title       = settings.i18n.reset_title;
 
-    // ✅ Buiten klikken sluit chatbot
+
+chatReset.addEventListener('click', () => {
+    if (confirm(settings.i18n.reset_confirm)) {
+        sessionStorage.removeItem('octopus_chat_history');
+        sessionStorage.removeItem(welcomeSessionKey);
+        sessionStorage.removeItem(topicStorageKey);
+        chatMessages.innerHTML = '';
+        selectedTopic = '';
+        topicOptions.forEach(option => option.classList.remove('is-selected'));
+        updateTopicBadge();
+        updateTopicStatus();
+        updateInputState();
+        topicPanel.classList.add('visible');
+        if (settings.welcome_message) {
+            addMessage(settings.welcome_message, 'bot', { isWelcome: true });
+            saveChatHistory();
+            sessionStorage.setItem(welcomeSessionKey, 'true');
+        }
+    }
+});
+
     document.addEventListener('click', function (e) {
         if (chatbot.style.display === 'flex' && !chatbot.contains(e.target) && !toggleButton.contains(e.target)) {
             closeChatbot();
@@ -87,90 +371,130 @@ document.addEventListener('DOMContentLoaded', function () {
         }, 300);
     }
 
-    // ✅ Bericht verzenden
+    // ✅ Input events
     chatSend.addEventListener('click', sendMessage);
-    chatInput.addEventListener('keypress', function (e) {
-        if (e.key === 'Enter') {
+    chatInput.addEventListener('keydown', function (e) {
+        if (e.key === 'Enter' && !e.shiftKey) {
             e.preventDefault();
             sendMessage();
         }
     });
 
-    chatInput.addEventListener('keydown', function (e) {
-    if (e.key === 'Enter' && !e.shiftKey) {
-        e.preventDefault();
-        sendMessage();
-    }
-});
-
-
-    // ✅ Bericht tonen in UI
-     function addMessage(content, sender = 'user', options = {}) {
+    // ✅ Bericht tonen
+   function addMessage(content, sender = 'user', options = {}) {
     const message = document.createElement('div');
     message.classList.add(sender === 'user' ? 'user-message' : 'bot-message');
 
+    content = decodeUnicode(content);
+    content = stripWrappingQuotes(content);
+
     const html = content
-        .replace(/\\n/g, '<br>')
-        .replace(/\\(.)/g, '$1')
-        .replace(/\[([^\]]+)]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
+    .replace(/\\n/g, '<br>')
+    .replace(/\\(.)/g, '$1')
+    .replace(/(?<!\*)\*\*(.+?)\*\*(?!\*)/g, '<strong>$1</strong>')
+.replace(/(?<!\*)\*(?!\*)([^*]+)(?<!\*)\*(?!\*)/g, '<em>$1</em>')
+    .replace(/\[([^\]]+)]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
+
+
 
     message.innerHTML = html;
 
-    // ✅ Alleen duimpjes tonen bij bot-antwoorden die geen welkom zijn
-    if (sender === 'bot' && !options.isWelcome) {
-        const feedback = document.createElement('div');
-        feedback.className = 'feedback-buttons';
-        feedback.innerHTML = `
-            <button class="thumb-up" title="Nuttig">👍</button>
-            <button class="thumb-down" title="Niet nuttig">👎</button>
-        `;
-        message.appendChild(feedback);
-    }
-
     chatMessages.appendChild(message);
-    chatMessages.scrollTop = chatMessages.scrollHeight;
-    saveChatHistory();
+chatMessages.scrollTo({
+    top: chatMessages.scrollHeight,
+    behavior: 'smooth'
+});
 }
 
 
-    // ✅ Markdown → HTML (klikbare links, linebreaks)
-    function markdownToHtml(text) {
-        return text
-            .replace(/\n/g, '<br>')
-            .replace(/\[([^\]]+)]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
-    }
-
-    // ✅ Save sessie
+    // ✅ Historiek opslaan
     function saveChatHistory() {
         sessionStorage.setItem('octopus_chat_history', chatMessages.innerHTML);
     }
+    
 
-
-    // ✅ AI verzenden & ontvangen
-    async function sendMessage() {
-        const message = chatInput.value.trim();
-        if (!message) return;
-        addMessage(message, 'user');
-        chatInput.value = '';
-
-        const typing = document.createElement('div');
-        typing.classList.add('typing-indicator');
-        typing.innerHTML = '<span class="dot"></span><span class="dot"></span><span class="dot"></span>';
-        chatMessages.appendChild(typing);
-        chatMessages.scrollTop = chatMessages.scrollHeight;
-
-        try {
-            const response = await fetch('/wp-json/octopus-ai/v1/chatbot', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ message })
-            });
-            const data = await response.text();
-            typing.remove();
-            addMessage(data, 'bot');
-        } catch (error) {
-            typing.remove();
-            addMessage('Er ging iets mis. Probeer later opnieuw.', 'bot');
-        }
+    // ✅ Versturen
+   async function sendMessage() {
+    if (!selectedTopic) {
+        topicPanel.classList.add('visible');
+        chatInput.blur();
+        return;
     }
+    const message = chatInput.value.trim();
+    if (!message || sendCooldown) return;
+
+    sendCooldown = true;
+    setTimeout(() => sendCooldown = false, 1500);
+
+    addMessage(message, 'user');
+    chatInput.value = '';
+
+    const typing = document.createElement('div');
+    typing.classList.add('typing-indicator');
+    typing.innerHTML = '<span class="dot"></span><span class="dot"></span><span class="dot"></span>';
+    chatMessages.appendChild(typing);
+    chatMessages.scrollTo({ top: chatMessages.scrollHeight, behavior: 'smooth' });
+
+    const fullHistory = Array.from(chatMessages.querySelectorAll('.user-message, .bot-message'))
+        .map(el => ({
+            role: el.classList.contains('user-message') ? 'user' : 'assistant',
+            content: el.innerText.trim()
+        }))
+        .filter(m => m.content.length > 0)
+        .slice(-12); // Laatste 6 uitwisselingen
+
+    try {
+        const response = await fetch('/wp-json/octopus-ai/v1/chatbot', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ message, history: fullHistory, topic: selectedTopic })
+        });
+
+        const data = await response.text();
+        typing.remove();
+
+        const bevatLink = data.includes(`https://login.octopus.be/manual/${lang}/`);
+
+
+const isFallback = data.trim().toLowerCase().startsWith(fallbackTrigger.toLowerCase());
+
+        addMessage(data, 'bot');
+
+        saveChatHistory();
+
+    } catch (error) {
+        typing.remove();
+        console.error('API-fout:', error);
+        addMessage(settings.i18n.api_error, 'bot');
+
+    }
+
+
+}
+
+function extractKeyword(question) {
+    const blacklist = ['hoe', 'kan', 'ik', 'de', 'het', 'een', 'wat', 'waar', 'wanneer', 'is', 'zijn', 'mijn', 'je', 'jouw', 'op', 'te'];
+    const words = question.toLowerCase().match(/\w+/g) || [];
+    const keywords = words.filter(word => word.length > 3 && !blacklist.includes(word));
+    return keywords[0] || 'octopus';
+}
+
+// ⏳ Automatisch afsluiten na inactiviteit
+let inactivityTimer;
+
+function resetInactivityTimer() {
+    clearTimeout(inactivityTimer);
+    inactivityTimer = setTimeout(() => {
+        if (chatbot.style.display === 'flex') {
+            closeChatbot();
+        }
+    }, 5 * 60 * 1000); // 5 minuten
+}
+
+// Reset timer bij interactie
+['click', 'keydown', 'mousemove'].forEach(event => {
+    chatbot.addEventListener(event, resetInactivityTimer);
+});
+resetInactivityTimer();
+
 });

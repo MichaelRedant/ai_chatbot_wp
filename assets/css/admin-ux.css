@@ -1,0 +1,398 @@
+/* Step 13: Admin UX Improvements - Styles */
+
+/* Enhanced Buttons */
+.button {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 16px;
+    font-weight: 500;
+    border-radius: 4px;
+    transition: all 0.2s ease;
+    cursor: pointer;
+    border: none;
+    text-decoration: none;
+}
+
+.button:hover:not(:disabled) {
+    transform: translateY(-1px);
+    box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+}
+
+.button:active:not(:disabled) {
+    transform: translateY(0);
+}
+
+.button:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.button-primary {
+    background: #0073aa;
+    color: white;
+}
+
+.button-primary:hover:not(:disabled) {
+    background: #005a87;
+}
+
+.button-secondary {
+    background: #f0f0f0;
+    color: #333;
+    border: 1px solid #ddd;
+}
+
+.button-secondary:hover:not(:disabled) {
+    background: #e8e8e8;
+}
+
+.button-success {
+    background: #4caf50;
+    color: white;
+}
+
+.button-success:hover:not(:disabled) {
+    background: #419d4e;
+}
+
+.button-danger {
+    background: #dc3545;
+    color: white;
+}
+
+.button-danger:hover:not(:disabled) {
+    background: #c82333;
+}
+
+/* Icons */
+.octopus-icon {
+    width: 16px;
+    height: 16px;
+    display: inline-block;
+}
+
+/* Spinner */
+.octopus-spinner-container {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 40px;
+    gap: 20px;
+    text-align: center;
+}
+
+.octopus-spinner {
+    width: 40px;
+    height: 40px;
+    border: 4px solid #f3f3f3;
+    border-top: 4px solid #0073aa;
+    border-radius: 50%;
+    animation: octopus-spin 1s linear infinite;
+}
+
+@keyframes octopus-spin {
+    0% { transform: rotate(0deg); }
+    100% { transform: rotate(360deg); }
+}
+
+/* Progress Bar */
+.octopus-progress-container {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.octopus-progress-label {
+    font-size: 12px;
+    font-weight: 500;
+    color: #666;
+}
+
+.octopus-progress-bar {
+    width: 100%;
+    height: 24px;
+    background: #f0f0f0;
+    border-radius: 4px;
+    overflow: hidden;
+    position: relative;
+}
+
+.octopus-progress-fill {
+    height: 100%;
+    background: linear-gradient(90deg, #4caf50 0%, #2e7d32 100%);
+    transition: width 0.3s ease;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.octopus-progress-text {
+    color: white;
+    font-size: 12px;
+    font-weight: bold;
+}
+
+/* Preview Panels */
+.octopus-preview-panel {
+    background: white;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    margin: 16px 0;
+    overflow: hidden;
+    transition: box-shadow 0.2s ease;
+}
+
+.octopus-preview-panel:hover {
+    box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+}
+
+.octopus-preview-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 12px 16px;
+    background: #f5f5f5;
+    cursor: pointer;
+    user-select: none;
+}
+
+.octopus-preview-header h4 {
+    margin: 0;
+    font-size: 14px;
+    font-weight: 600;
+}
+
+.octopus-preview-toggle {
+    background: none;
+    border: none;
+    cursor: pointer;
+    padding: 0;
+    display: flex;
+    align-items: center;
+    color: #666;
+    transition: transform 0.2s ease;
+}
+
+.octopus-preview-toggle .dashicons {
+    font-size: 20px;
+    width: 20px;
+    height: 20px;
+}
+
+.octopus-preview-content {
+    max-height: 0;
+    overflow: hidden;
+    transition: max-height 0.3s ease;
+}
+
+.octopus-preview-open .octopus-preview-content {
+    max-height: 500px;
+    padding: 16px;
+    border-top: 1px solid #ddd;
+}
+
+.octopus-preview-panel.octopus-code .octopus-preview-content {
+    background: #f5f5f5;
+    font-family: 'Courier New', monospace;
+    font-size: 12px;
+    overflow-x: auto;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+}
+
+/* Help Text & Icons */
+.octopus-help-icon {
+    display: inline-flex;
+    align-items: center;
+    cursor: help;
+    color: #0073aa;
+    margin-left: 4px;
+}
+
+.octopus-help-icon .dashicons {
+    width: 16px;
+    height: 16px;
+    font-size: 16px;
+}
+
+.octopus-help-text {
+    font-size: 12px;
+    color: #666;
+    margin-top: 4px;
+    margin-bottom: 0;
+}
+
+.octopus-tooltip {
+    position: fixed;
+    background: #333;
+    color: white;
+    padding: 8px 12px;
+    border-radius: 4px;
+    font-size: 12px;
+    max-width: 300px;
+    z-index: 9999;
+    pointer-events: none;
+    word-break: break-word;
+}
+
+.octopus-tooltip::after {
+    content: '';
+    position: absolute;
+    width: 6px;
+    height: 6px;
+    background: #333;
+    transform: rotate(45deg);
+}
+
+.octopus-tooltip-top::after {
+    bottom: -3px;
+    left: 50%;
+    transform: translateX(-50%) rotate(45deg);
+}
+
+.octopus-tooltip-bottom::after {
+    top: -3px;
+    left: 50%;
+    transform: translateX(-50%) rotate(45deg);
+}
+
+.octopus-tooltip-right::after {
+    left: -3px;
+    top: 50%;
+    transform: translateY(-50%) rotate(45deg);
+}
+
+/* Form Fields */
+.octopus-form-field {
+    margin-bottom: 20px;
+}
+
+.octopus-form-label {
+    display: block;
+    margin-bottom: 8px;
+    font-weight: 500;
+    color: #333;
+}
+
+.octopus-required {
+    color: #dc3545;
+    margin-left: 2px;
+}
+
+.octopus-form-field input,
+.octopus-form-field textarea,
+.octopus-form-field select {
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    padding: 8px 12px;
+    font-size: 14px;
+    transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.octopus-form-field input:focus,
+.octopus-form-field textarea:focus,
+.octopus-form-field select:focus {
+    outline: none;
+    border-color: #0073aa;
+    box-shadow: 0 0 0 3px rgba(0,115,170,0.1);
+}
+
+.octopus-field-error input,
+.octopus-field-error textarea,
+.octopus-field-error select {
+    border-color: #dc3545;
+    background: #fff5f5;
+}
+
+.octopus-field-error:focus input,
+.octopus-field-error:focus textarea,
+.octopus-field-error:focus select {
+    box-shadow: 0 0 0 3px rgba(220,53,69,0.1);
+}
+
+.octopus-field-valid input,
+.octopus-field-valid textarea,
+.octopus-field-valid select {
+    border-color: #4caf50;
+    background: #f5fff5;
+}
+
+.octopus-validation-feedback {
+    display: none;
+    margin-top: 6px;
+    font-size: 12px;
+    color: #dc3545;
+}
+
+.octopus-field-error .octopus-validation-feedback {
+    display: block;
+}
+
+/* Info Boxes */
+.octopus-info-box {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    padding: 16px;
+    border-radius: 4px;
+    margin: 16px 0;
+    font-size: 14px;
+    line-height: 1.6;
+}
+
+.octopus-info-box .dashicons {
+    flex-shrink: 0;
+    margin-top: 2px;
+}
+
+/* Responsive Adjustments */
+@media (max-width: 768px) {
+    .octopus-preview-header {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 8px;
+    }
+    
+    .button {
+        width: 100%;
+        justify-content: center;
+    }
+    
+    .octopus-tooltip {
+        max-width: 80vw;
+    }
+}
+
+/* Dark Mode Support */
+@media (prefers-color-scheme: dark) {
+    .octopus-form-field input,
+    .octopus-form-field textarea,
+    .octopus-form-field select {
+        background: #2d2d2d;
+        color: #e8e8e8;
+        border-color: #444;
+    }
+    
+    .octopus-preview-panel {
+        background: #2d2d2d;
+        border-color: #444;
+    }
+    
+    .octopus-preview-header {
+        background: #1e1e1e;
+    }
+    
+    .octopus-preview-header h4 {
+        color: #e8e8e8;
+    }
+    
+    .octopus-tooltip {
+        background: #1e1e1e;
+    }
+    
+    .octopus-tooltip::after {
+        background: #1e1e1e;
+    }
+}

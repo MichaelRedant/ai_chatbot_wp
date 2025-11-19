@@ -1,15 +1,18 @@
 :root {
-    --primary-color: #0f6c95; /* Default kleur, wordt overschreven via JS */
+    --primary-color: #0f6c95;
+    --header-text-color: #ffffff;
 }
 
-/* Toggle knop */
+/* ==========================================================================
+   TOGGLE BUTTON
+========================================================================== */
 #octopus-chat-toggle {
     position: fixed;
     bottom: 20px;
     right: 20px;
     width: 60px;
     height: 60px;
-    background: #ffffff;
+    background: #fff;
     border-radius: 50%;
     box-shadow: 0 4px 12px rgba(0,0,0,0.15);
     display: flex;
@@ -17,11 +20,13 @@
     justify-content: center;
     cursor: pointer;
     z-index: 9999;
-    transition: transform 0.2s ease;
+    transition: transform 0.3s ease-in-out;
+    animation: pulse 4s ease-in-out infinite;
 }
 
 #octopus-chat-toggle:hover {
-    transform: translateY(-3px);
+    transform: translateY(-2px);
+    animation: hoverPulse 0.6s ease-in-out;
 }
 
 #octopus-chat-toggle img {
@@ -29,7 +34,39 @@
     height: 40px;
 }
 
-/* Chat venster */
+@media (prefers-reduced-motion: reduce) {
+    #octopus-chat-toggle {
+        animation: none;
+    }
+
+    #octopus-chat-toggle:hover {
+        animation: none;
+    }
+
+}
+
+#octopus-chat-toggle.pop-highlight {
+    animation: pop 0.3s ease-out, pulse 4s ease-in-out infinite;
+}
+
+#octopus-chat-toggle.pop-highlight::after {
+    content: '';
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 80px;
+    height: 80px;
+    transform: translate(-50%, -50%) scale(1);
+    border: 2px solid var(--primary-color);
+    border-radius: 50%;
+    opacity: 0;
+    animation: popLines 0.6s ease-out;
+    pointer-events: none;
+}
+
+/* ==========================================================================
+   CHAT WINDOW CONTAINER
+========================================================================== */
 #octopus-chatbot {
     display: none;
     position: fixed;
@@ -37,9 +74,9 @@
     right: 20px;
     width: 320px;
     max-height: 500px;
-     background: rgba(255, 255, 255, 0.55);
-   backdrop-filter: blur(12px);
-     -webkit-backdrop-filter: blur(12px);
+    background: rgba(255, 255, 255, 0.55);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
     border: 1px solid rgba(255, 255, 255, 0.3);
     border-radius: 16px;
     box-shadow: 0 8px 24px rgba(0,0,0,0.2);
@@ -48,50 +85,220 @@
     overflow: hidden;
     z-index: 9999;
     transition: all 0.3s ease;
-    
 }
 
-#chat-messages,
-#chat-input-container {
-    background: rgba(255, 255, 255, 0.4);
-    backdrop-filter: blur(10px);
-    -webkit-backdrop-filter: blur(10px);
-}
-
-/* Header */
+/* ==========================================================================
+   HEADER
+========================================================================== */
 #chat-header {
-    background: var(--primary-color);
-    color: white;
+    background-color: var(--primary-color);
+    color: var(--header-text-color);
     padding: 10px;
-    font-weight: bold;
+    font-size: 16px;
+    font-weight: 600;
+    border-top-left-radius: 12px;
+    border-top-right-radius: 12px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+
+.chat-header-inner {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+#chat-header .chat-header-title {
+    flex-grow: 1;
     text-align: center;
-    position: relative;
+    color: var(--header-text-color);
+    font-weight: 600;
+    font-size: 16px;
+}
+
+#chat-topic-panel {
+    max-height: 0;
+    overflow: hidden;
+    opacity: 0;
+    padding: 0 16px;
+    background: rgba(255, 255, 255, 0.9);
+    border-bottom: 1px solid rgba(15, 108, 149, 0.15);
+    transition: all 0.3s ease;
+    pointer-events: none;
+}
+
+#chat-topic-panel.visible {
+    max-height: 460px;
+    opacity: 1;
+    padding-top: 16px;
+    padding-bottom: 16px;
+    pointer-events: auto;
+}
+
+.topic-panel-inner {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.topic-intro {
+    margin: 0;
+    font-size: 13px;
+    color: #242424;
+    font-weight: 500;
+}
+
+.topic-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    gap: 10px;
+}
+
+.topic-option {
+    border: 1px solid transparent;
+    border-radius: 14px;
+    padding: 10px 12px;
+    background: #f8f8fb;
+    cursor: pointer;
+    transition: border-color 0.2s ease, transform 0.2s ease, background 0.2s ease;
+    text-align: left;
+}
+
+.topic-option:hover {
+    border-color: rgba(15, 108, 149, 0.4);
+    transform: translateY(-1px);
+    background: #fff;
+}
+
+.topic-option.is-selected {
+    border-color: var(--primary-color);
+    box-shadow: 0 0 0 1px rgba(15, 108, 149, 0.15);
+    background: #fff;
+}
+
+.topic-option-title {
+    display: block;
+    font-weight: 600;
+    font-size: 14px;
+    margin-bottom: 4px;
+}
+
+.topic-option-description {
+    display: block;
+    font-size: 12px;
+    color: #5a5a5a;
+    line-height: 1.3;
+}
+
+#chat-topic-status {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 6px 14px;
+    font-size: 13px;
+    border-bottom: 1px solid rgba(15, 108, 149, 0.25);
+    background: rgba(15, 108, 149, 0.06);
+}
+
+#chat-topic-status.is-hidden {
+    display: none;
+}
+
+.topic-change-button {
+    border: none;
+    background: transparent;
+    color: var(--primary-color);
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.topic-change-button:hover {
+    text-decoration: underline;
+}
+
+.topic-status-label {
+    flex: 1;
+    color: #0c3c4f;
+}
+
+.chat-topic-badge {
+    border: 1px solid rgba(255, 255, 255, 0.6);
+    background: rgba(255, 255, 255, 0.2);
+    color: var(--header-text-color);
+    font-size: 12px;
+    padding: 4px 12px;
+    border-radius: 999px;
+    cursor: pointer;
+    margin-left: 10px;
+    transition: transform 0.2s ease;
+}
+
+.chat-topic-badge:hover {
+    transform: translateY(-1px);
+}
+
+.input-disabled {
+    opacity: 0.6;
+}
+
+#chat-header img {
+    height: 24px;
+    max-width: 24px;
+}
+
+.chat-logo-glass {
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    background: rgba(255,255,255,0.6);
+    -webkit-backdrop-filter: blur(4px);
+    backdrop-filter: blur(4px);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin-right: 10px;
 }
 
 #chat-close {
-    position: absolute;
-    right: 10px;
-    top: 5px;
     background: none;
     border: none;
-    color: white;
+    color: var(--header-text-color);
     font-size: 18px;
     cursor: pointer;
 }
 
-/* Berichten */
+#chat-header,
+#chat-header * {
+    color: var(--header-text-color) !important;
+    fill: var(--header-text-color) !important; /* voor SVG-iconen indien van toepassing */
+}
+
+
+#chat-header,
+#chat-header .chat-header-title,
+#chat-header .chat-close-button,
+#chat-header button {
+    color: var(--header-text-color) !important;
+}
+
+
+/* ==========================================================================
+   MESSAGES
+========================================================================== */
 #chat-messages {
     flex: 1;
     padding: 10px;
     overflow-y: auto;
     font-size: 14px;
     color: #333;
+    background: rgba(255, 255, 255, 0.65);
     backdrop-filter: blur(10px);
-    background: rgba(255, 255, 255, 0.65); /* transparant wit */
     border-top: 1px solid rgba(255,255,255,0.2);
     border-bottom: 1px solid rgba(0,0,0,0.1);
 }
-
 
 .user-message {
     margin: 5px 0;
@@ -115,14 +322,33 @@
     max-width: 80%;
 }
 
-.typing-indicator {
-    font-style: italic;
-    color: #777;
-    font-size: 13px;
-    margin: 5px 0;
+.fallback-link a:hover {
+    text-decoration: underline;
+    color: #0c5f89;
 }
 
-/* Input */
+.chat-reset-button {
+    background: transparent;
+    border: none;
+    color: var(--primary-color);
+    font-size: 12px;
+    padding: 6px 12px;
+    cursor: pointer;
+    text-align: left;
+    margin: 4px 10px 0;
+    font-weight: bold;
+    opacity: 0.7;
+}
+
+.chat-reset-button:hover {
+    opacity: 1;
+    text-decoration: underline;
+}
+
+
+/* ==========================================================================
+   INPUT AREA
+========================================================================== */
 #chat-input-container {
     display: flex;
     padding: 8px;
@@ -139,10 +365,9 @@
     border-radius: 20px;
     font-size: 14px;
     outline: none;
-    transition: border 0.2s ease;
     background: #fff;
+    transition: border 0.2s ease;
 }
-
 
 #chat-input:focus {
     border-color: var(--primary-color);
@@ -168,7 +393,9 @@
     transform: scale(0.96);
 }
 
-
+/* ==========================================================================
+   POWERED BY FOOTER
+========================================================================== */
 #octopus-chat-powered-by {
     text-align: center;
     font-size: 11px;
@@ -179,10 +406,13 @@
 }
 
 #octopus-chat-powered-by a:hover {
-    color: #0f6c95;
+    color: var(--primary-color);
     text-decoration: underline;
 }
 
+/* ==========================================================================
+   FEEDBACK
+========================================================================== */
 .feedback {
     margin-top: 6px;
     font-size: 16px;
@@ -199,12 +429,36 @@
     opacity: 1;
 }
 
+/* ==========================================================================
+   BACKEND
+========================================================================== */
 
+#model-info-table table th,
+#model-info-table table td {
+    padding: 8px 10px;
+    text-align: left;
+    font-size: 13px;
+}
+#model-info-table table td:first-child {
+    font-weight: 600;
+    color: #0f6c95;
+}
+#model-info-table {
+    box-shadow: 0 1px 2px rgba(0,0,0,0.05);
+}
+
+
+/* ==========================================================================
+   TYPING INDICATOR
+========================================================================== */
 .typing-indicator {
     display: flex;
     gap: 4px;
     padding: 5px 10px;
     align-items: center;
+    font-style: italic;
+    color: #777;
+    font-size: 13px;
 }
 
 .typing-indicator .dot {
@@ -218,6 +472,7 @@
 .typing-indicator .dot:nth-child(2) {
     animation-delay: 0.2s;
 }
+
 .typing-indicator .dot:nth-child(3) {
     animation-delay: 0.4s;
 }
@@ -227,8 +482,9 @@
     40% { opacity: 1; }
 }
 
-
-/* Fade-in animaties */
+/* ==========================================================================
+   ANIMATIES
+========================================================================== */
 .fade-in {
     animation: fadeIn 0.3s ease forwards;
 }
@@ -239,29 +495,145 @@
 
 @keyframes fadeIn {
     from { opacity: 0; transform: translateY(10px); }
-    to { opacity: 1; transform: translateY(0); }
+    to   { opacity: 1; transform: translateY(0); }
 }
 
 @keyframes fadeOut {
     from { opacity: 1; transform: translateY(0); }
-    to { opacity: 0; transform: translateY(10px); }
+    to   { opacity: 0; transform: translateY(10px); }
 }
-/* Slide-in en slide-out animaties */
+
+.slide-in {
+    animation: slideIn 0.3s ease forwards;
+}
+
+.slide-out {
+    animation: slideOut 0.3s ease forwards;
+}
+
 @keyframes slideIn {
     from { transform: translateY(30px); opacity: 0; }
-    to { transform: translateY(0); opacity: 1; }
+    to   { transform: translateY(0); opacity: 1; }
 }
+
 @keyframes slideOut {
     from { transform: translateY(0); opacity: 1; }
-    to { transform: translateY(30px); opacity: 0; }
+    to   { transform: translateY(30px); opacity: 0; }
 }
-.slide-in { animation: slideIn 0.3s ease forwards; }
-.slide-out { animation: slideOut 0.3s ease forwards; }
 
-/* Pulse animatie voor toggle button */
+.pulse-animation {
+    animation: pulse 0.6s ease;
+}
+
 @keyframes pulse {
-    0% { transform: scale(1); }
-    50% { transform: scale(1.05); }
+    0%   { transform: scale(1); }
+    50%  { transform: scale(1.05); }
     100% { transform: scale(1); }
 }
-.pulse-animation { animation: pulse 0.6s ease; }
+
+@keyframes hoverPulse {
+    0%   { transform: translateY(-2px) scale(1); }
+    50%  { transform: translateY(-2px) scale(1.03); }
+    100% { transform: translateY(-2px) scale(1); }
+}
+
+
+@keyframes pop {
+    0%   { transform: scale(1); }
+    50%  { transform: scale(1.2); }
+    100% { transform: scale(1); }
+}
+
+@keyframes popLines {
+    0%   { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+    100% { opacity: 0; transform: translate(-50%, -50%) scale(1.6); }
+}
+
+
+/* ==========================================================================
+   📱 MOBIELE LAYOUT (schermen ≤ 480px)
+========================================================================== */
+@media only screen and (max-width: 480px) {
+
+    #octopus-chat-toggle {
+        bottom: 16px;
+        right: 16px;
+        width: 50px;
+        height: 50px;
+    }
+
+    #octopus-chat-toggle img {
+        width: 32px;
+        height: 32px;
+    }
+
+    #octopus-chatbot {
+        bottom: 16px;
+        left: 5%;
+        right: 5%;
+        width: 90%;
+        max-height: 80vh;
+        border-radius: 12px;
+        box-shadow: 0 -2px 10px rgba(0, 0, 0, 0.2);
+    }
+
+    #chat-header {
+        padding: 10px 14px;
+    }
+
+    #chat-header .chat-header-title {
+        font-size: 15px;
+        text-align: center;
+        flex-grow: 1;
+    }
+
+    #chat-topic-panel {
+        padding-left: 12px;
+        padding-right: 12px;
+    }
+
+    .topic-grid {
+        grid-template-columns: 1fr;
+    }
+
+    #chat-topic-status {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 4px;
+    }
+
+    #chat-close {
+        font-size: 20px;
+    }
+
+    #chat-messages {
+        padding: 8px;
+        font-size: 13px;
+    }
+
+    .user-message,
+    .bot-message {
+        max-width: 90%;
+        font-size: 13px;
+    }
+
+    #chat-input-container {
+        padding: 6px;
+        gap: 6px;
+    }
+
+    #chat-input {
+        font-size: 13px;
+        padding: 8px 12px;
+    }
+
+    #chat-send {
+        font-size: 13px;
+        padding: 8px 14px;
+    }
+
+    .typing-indicator {
+        font-size: 12px;
+        padding: 5px 8px;
+    }
+}

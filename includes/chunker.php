@@ -1,13 +1,9 @@
 <?php
 namespace OctopusAI\Includes;
 
-if (!defined('ABSPATH')) exit;
-
 require_once __DIR__ . '/../vendor/autoload.php';
 
 use Smalot\PdfParser\Parser;
-
-if (!class_exists('OctopusAI\Includes\Chunker')) {
 
 class Chunker
 {
@@ -25,9 +21,10 @@ class Chunker
      *
      * @param string $filePath Volledig pad naar het PDF-bestand.
      * @param string $sourceId Slug of bestandsnaam zonder extensie.
+     * @param string $fileUrl  Publieke URL naar het PDF-bestand (optioneel).
      * @return array
      */
-    public function chunkPdfWithMetadata(string $filePath, string $sourceId): array
+    public function chunkPdfWithMetadata(string $filePath, string $sourceId, string $fileUrl = ''): array
     {
         $parser = new Parser();
         $pdf = $parser->parseFile($filePath);
@@ -43,6 +40,10 @@ class Chunker
             $pageNumber = $i + 1;
             $pageSlug = $this->generatePageSlug($sourceTitle, $pageNumber);
             $sectionTitle = $this->detectSectionTitle($text);
+            $pageUrl = '';
+            if ($fileUrl !== '') {
+                $pageUrl = rtrim($fileUrl, '/') . '#page=' . $pageNumber;
+            }
 
             $splitChunks = $this->splitTextIntoChunks($text, $this->chunkSize);
             foreach ($splitChunks as $chunkText) {
@@ -53,6 +54,7 @@ class Chunker
                         'source_title' => $sourceTitle,
                         'original_page' => $pageNumber,
                         'section_title' => $sectionTitle,
+                        'source_url' => $pageUrl,
                     ],
                 ];
             }
@@ -113,5 +115,4 @@ class Chunker
 
         return $chunks;
     }
-}
 }
