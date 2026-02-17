@@ -16,12 +16,284 @@ if (!defined('ABSPATH')) {
 }
 
 $GLOBALS['octopus_ai_missing_bootstrap_files'] = array();
+$GLOBALS['octopus_ai_repair_report'] = array();
+
+if (!function_exists('octopus_ai_get_backslash_entries')) {
+    function octopus_ai_get_backslash_entries($base_path)
+    {
+        $base_path = trailingslashit(wp_normalize_path((string) $base_path));
+        if ($base_path === '' || !is_dir($base_path)) {
+            return array();
+        }
+
+        $entries = @scandir($base_path);
+        if (!is_array($entries)) {
+            return array();
+        }
+
+        $backslash_entries = array();
+        foreach ($entries as $entry) {
+            if ($entry === '.' || $entry === '..') {
+                continue;
+            }
+            if (strpos((string) $entry, '\\') !== false) {
+                $backslash_entries[] = (string) $entry;
+            }
+        }
+
+        return $backslash_entries;
+    }
+}
+
+if (!function_exists('octopus_ai_repair_backslash_entries')) {
+    function octopus_ai_repair_backslash_entries($base_path)
+    {
+        $base_path = trailingslashit(wp_normalize_path((string) $base_path));
+        $report = array(
+            'attempted' => false,
+            'moved' => 0,
+            'failed' => 0,
+            'remaining' => 0,
+        );
+
+        if ($base_path === '' || !is_dir($base_path)) {
+            return $report;
+        }
+
+        for ($pass = 0; $pass < 4; $pass++) {
+            $entries = octopus_ai_get_backslash_entries($base_path);
+            if (empty($entries)) {
+                break;
+            }
+
+            $report['attempted'] = true;
+
+            foreach ($entries as $entry) {
+                $source = $base_path . $entry;
+                if (!file_exists($source)) {
+                    continue;
+                }
+
+                $normalized = str_replace('\\', '/', $entry);
+                $normalized = trim((string) $normalized, '/');
+                if ($normalized === '') {
+                    $report['failed']++;
+                    continue;
+                }
+
+                $target = $base_path . $normalized;
+                $target_dir = dirname($target);
+                if (!is_dir($target_dir)) {
+                    wp_mkdir_p($target_dir);
+                }
+
+                $moved = false;
+                if (!file_exists($target)) {
+                    $moved = @rename($source, $target);
+                    if (!$moved && is_file($source)) {
+                        $moved = @copy($source, $target);
+                        if ($moved) {
+                            @unlink($source);
+                        }
+                    }
+                } else {
+                    // Bestemming bestaat al: probeer bron op te ruimen.
+                    if (is_file($source)) {
+                        $moved = @unlink($source);
+                    } elseif (is_dir($source)) {
+                        $moved = @rmdir($source);
+                    }
+                }
+
+                if ($moved) {
+                    $report['moved']++;
+                } else {
+                    $report['failed']++;
+                }
+            }
+        }
+
+        $report['remaining'] = count(octopus_ai_get_backslash_entries($base_path));
+        return $report;
+    }
+}
+
+if (!function_exists('octopus_ai_maybe_repair_flattened_install')) {
+    function octopus_ai_maybe_repair_flattened_install()
+    {
+        $base_path = trailingslashit(wp_normalize_path(plugin_dir_path(__FILE__)));
+        $needs_structure = !is_dir($base_path . 'includes') || !is_dir($base_path . 'admin') || !is_dir($base_path . 'vendor');
+        $has_backslash_entries = !empty(octopus_ai_get_backslash_entries($base_path));
+
+        if ($needs_structure && $has_backslash_entries) {
+            $GLOBALS['octopus_ai_repair_report'] = octopus_ai_repair_backslash_entries($base_path);
+        } else {
+            $GLOBALS['octopus_ai_repair_report'] = array(
+                'attempted' => false,
+                'moved' => 0,
+                'failed' => 0,
+                'remaining' => $has_backslash_entries ? count(octopus_ai_get_backslash_entries($base_path)) : 0,
+            );
+        }
+    }
+}
+
+octopus_ai_maybe_repair_flattened_install();
+
+if (!function_exists('octopus_ai_is_runtime_candidate_path')) {
+    function octopus_ai_is_runtime_candidate_path($candidate_path)
+    {
+        $candidate_path = trailingslashit(wp_normalize_path((string) $candidate_path));
+        if ($candidate_path === '' || !is_dir($candidate_path)) {
+            return false;
+        }
+
+        $required_files = array(
+            'octopus-ai-chatbot.php',
+            'includes/api-handler.php',
+            'admin/settings-page.php',
+        );
+
+        foreach ($required_files as $required_file) {
+            if (!file_exists($candidate_path . $required_file)) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+}
+
+if (!function_exists('octopus_ai_find_runtime_path_from_root')) {
+    function octopus_ai_find_runtime_path_from_root($root_path, $max_depth = 4)
+    {
+        $root_path = trailingslashit(wp_normalize_path((string) $root_path));
+        $max_depth = max(0, (int) $max_depth);
+
+        if ($root_path === '' || !is_dir($root_path)) {
+            return '';
+        }
+
+        for ($depth = 0; $depth <= $max_depth; $depth++) {
+            $pattern = $root_path . str_repeat('*/', $depth) . 'octopus-ai-chatbot.php';
+            $matches = glob($pattern);
+            if (!is_array($matches) || empty($matches)) {
+                continue;
+            }
+
+            sort($matches, SORT_STRING);
+            foreach ($matches as $main_file) {
+                $candidate = trailingslashit(wp_normalize_path(dirname((string) $main_file)));
+                if (octopus_ai_is_runtime_candidate_path($candidate)) {
+                    return $candidate;
+                }
+            }
+        }
+
+        return '';
+    }
+}
+
+if (!function_exists('octopus_ai_get_runtime_base_path')) {
+    function octopus_ai_get_runtime_base_path()
+    {
+        static $resolved_path = '';
+        if ($resolved_path !== '') {
+            return $resolved_path;
+        }
+
+        $base_path = trailingslashit(wp_normalize_path(plugin_dir_path(__FILE__)));
+        if (octopus_ai_is_runtime_candidate_path($base_path)) {
+            $resolved_path = $base_path;
+            return $resolved_path;
+        }
+
+        $known_folder_names = array(
+            'ai-chatbot',
+            'ai_chatbot_wp',
+            'ai-chatbot-recovery',
+            'ai_chatbot_wp_recovery',
+            'ai_chatbot_wp_flat',
+            'ai_chatbot_wp_flat_v2',
+            'ai_chatbot_wp_hotfix_flat',
+            'ai-chatbot-hotfix',
+        );
+
+        $candidates = array($base_path);
+        foreach ($known_folder_names as $folder_name) {
+            $candidates[] = trailingslashit($base_path . $folder_name);
+        }
+
+        $children = glob($base_path . '*', GLOB_ONLYDIR);
+        if (is_array($children)) {
+            foreach (array_slice($children, 0, 40) as $child_path) {
+                $candidates[] = trailingslashit(wp_normalize_path($child_path));
+            }
+        }
+
+        $parent_path = trailingslashit(wp_normalize_path(dirname(rtrim($base_path, '/'))));
+        $candidates[] = $parent_path;
+        foreach ($known_folder_names as $folder_name) {
+            $candidates[] = trailingslashit($parent_path . $folder_name);
+        }
+
+        $candidates = array_values(array_unique(array_map(static function ($path) {
+            return trailingslashit(wp_normalize_path((string) $path));
+        }, $candidates)));
+
+        foreach ($candidates as $candidate) {
+            if (octopus_ai_is_runtime_candidate_path($candidate)) {
+                $resolved_path = $candidate;
+                return $resolved_path;
+            }
+        }
+
+        $search_roots = array(
+            $base_path,
+            $parent_path,
+            trailingslashit(wp_normalize_path(WP_PLUGIN_DIR)),
+        );
+        foreach ($search_roots as $search_root) {
+            $found = octopus_ai_find_runtime_path_from_root($search_root, 8);
+            if ($found !== '') {
+                $resolved_path = $found;
+                return $resolved_path;
+            }
+        }
+
+        $resolved_path = $base_path;
+        return $resolved_path;
+    }
+}
+
+if (!function_exists('octopus_ai_get_runtime_base_url')) {
+    function octopus_ai_get_runtime_base_url()
+    {
+        static $resolved_url = '';
+        if ($resolved_url !== '') {
+            return $resolved_url;
+        }
+
+        $runtime_path = trailingslashit(wp_normalize_path(octopus_ai_get_runtime_base_path()));
+        $plugins_dir = trailingslashit(wp_normalize_path(WP_PLUGIN_DIR));
+        if (strpos($runtime_path, $plugins_dir) === 0) {
+            $relative = trim(str_replace('\\', '/', substr($runtime_path, strlen($plugins_dir))), '/');
+            if ($relative !== '') {
+                $resolved_url = trailingslashit(WP_PLUGIN_URL . '/' . $relative);
+                return $resolved_url;
+            }
+        }
+
+        $resolved_url = plugin_dir_url(__FILE__);
+        return $resolved_url;
+    }
+}
 
 if (!function_exists('octopus_ai_safe_require')) {
     function octopus_ai_safe_require($relative_path)
     {
         $relative_path = ltrim((string) $relative_path, '/\\');
-        $absolute_path = plugin_dir_path(__FILE__) . $relative_path;
+        $absolute_path = octopus_ai_get_runtime_base_path() . $relative_path;
 
         if (!file_exists($absolute_path)) {
             $GLOBALS['octopus_ai_missing_bootstrap_files'][] = $relative_path;
@@ -34,6 +306,7 @@ if (!function_exists('octopus_ai_safe_require')) {
     }
 }
 
+octopus_ai_safe_require('includes/cleanup.php');
 octopus_ai_safe_require('includes/provider-profile.php');
 
 octopus_ai_safe_require('admin/settings-page.php');
@@ -86,10 +359,26 @@ if (!function_exists('octopus_ai_collect_preflight_report')) {
         $missing_bootstrap = isset($GLOBALS['octopus_ai_missing_bootstrap_files']) && is_array($GLOBALS['octopus_ai_missing_bootstrap_files'])
             ? array_values(array_unique(array_filter(array_map('sanitize_text_field', $GLOBALS['octopus_ai_missing_bootstrap_files']))))
             : array();
+        $repair_report = isset($GLOBALS['octopus_ai_repair_report']) && is_array($GLOBALS['octopus_ai_repair_report'])
+            ? $GLOBALS['octopus_ai_repair_report']
+            : array();
         if (!empty($missing_bootstrap)) {
             $report['critical'][] = 'Ontbrekende pluginbestanden: ' . implode(', ', $missing_bootstrap);
+            $report['warning'][] = 'Diagnose runtime pad: ' . (string) octopus_ai_get_runtime_base_path();
+            $report['warning'][] = 'Diagnose plugin_dir_path: ' . (string) plugin_dir_path(__FILE__);
         } else {
             $report['ok'][] = 'Alle kernbestanden van de plugin zijn gevonden.';
+        }
+
+        if (!empty($repair_report['attempted'])) {
+            $report['warning'][] = sprintf(
+                'Auto-repair uitgevoerd: verplaatst/opgeruimd=%d, mislukt=%d, resterend met backslashes=%d',
+                (int) ($repair_report['moved'] ?? 0),
+                (int) ($repair_report['failed'] ?? 0),
+                (int) ($repair_report['remaining'] ?? 0)
+            );
+        } elseif (!empty($repair_report['remaining'])) {
+            $report['warning'][] = 'Backslash-bestandsnamen gedetecteerd in pluginroot: ' . (int) $repair_report['remaining'] . '.';
         }
 
         if (version_compare(PHP_VERSION, '7.4.0', '<')) {
@@ -155,7 +444,7 @@ if (!function_exists('octopus_ai_collect_preflight_report')) {
             $report['ok'][] = 'mbstring extensie is beschikbaar.';
         }
 
-        $vendor_autoload = plugin_dir_path(__FILE__) . 'vendor/autoload.php';
+        $vendor_autoload = octopus_ai_get_runtime_base_path() . 'vendor/autoload.php';
         if (!file_exists($vendor_autoload)) {
             $report['warning'][] = 'vendor/autoload.php ontbreekt. PDF parser-functies kunnen beperkt zijn.';
         } else {
@@ -254,7 +543,7 @@ if (!function_exists('octopus_ai_register_fatal_shutdown_logger')) {
                 }
 
                 $file = isset($error['file']) ? (string) $error['file'] : '';
-                $plugin_root = plugin_dir_path(__FILE__);
+                $plugin_root = octopus_ai_get_runtime_base_path();
                 if ($file === '' || strpos($file, $plugin_root) !== 0) {
                     return;
                 }
@@ -267,6 +556,88 @@ if (!function_exists('octopus_ai_register_fatal_shutdown_logger')) {
     }
 
     octopus_ai_register_fatal_shutdown_logger();
+}
+
+if (!function_exists('octopus_ai_register_recovery_menu')) {
+    function octopus_ai_register_recovery_menu()
+    {
+        if (!is_admin() || !current_user_can('manage_options')) {
+            return;
+        }
+
+        $missing_bootstrap = isset($GLOBALS['octopus_ai_missing_bootstrap_files']) && is_array($GLOBALS['octopus_ai_missing_bootstrap_files'])
+            ? array_values(array_unique(array_filter($GLOBALS['octopus_ai_missing_bootstrap_files'])))
+            : array();
+
+        if (empty($missing_bootstrap) && function_exists('octopus_ai_settings_page')) {
+            return;
+        }
+
+        add_menu_page(
+            'Octopus AI Herstel',
+            'Octopus AI Herstel',
+            'manage_options',
+            'octopus-ai-chatbot-recovery',
+            'octopus_ai_render_recovery_page',
+            'dashicons-warning',
+            27
+        );
+    }
+
+    add_action('admin_menu', 'octopus_ai_register_recovery_menu', 1);
+}
+
+if (!function_exists('octopus_ai_render_recovery_page')) {
+    function octopus_ai_render_recovery_page()
+    {
+        if (!current_user_can('manage_options')) {
+            return;
+        }
+
+        $missing_bootstrap = isset($GLOBALS['octopus_ai_missing_bootstrap_files']) && is_array($GLOBALS['octopus_ai_missing_bootstrap_files'])
+            ? array_values(array_unique(array_filter($GLOBALS['octopus_ai_missing_bootstrap_files'])))
+            : array();
+        $runtime_path = (string) octopus_ai_get_runtime_base_path();
+        $plugin_path = (string) plugin_dir_path(__FILE__);
+
+        $runtime_items = array();
+        if (is_dir($runtime_path)) {
+            $entries = scandir($runtime_path);
+            if (is_array($entries)) {
+                foreach ($entries as $entry) {
+                    if ($entry === '.' || $entry === '..') {
+                        continue;
+                    }
+                    $runtime_items[] = (string) $entry;
+                }
+            }
+        }
+
+        echo '<div class="wrap">';
+        echo '<h1>Octopus AI Herstel</h1>';
+
+        if (empty($missing_bootstrap)) {
+            echo '<div class="notice notice-success"><p>Geen ontbrekende bootstrapbestanden gedetecteerd.</p></div>';
+        } else {
+            echo '<div class="notice notice-error"><p><strong>Ontbrekende bestanden:</strong> ' . esc_html(implode(', ', $missing_bootstrap)) . '</p></div>';
+        }
+
+        echo '<p><strong>Runtime pad:</strong> <code>' . esc_html($runtime_path) . '</code></p>';
+        echo '<p><strong>Plugin pad (__FILE__):</strong> <code>' . esc_html($plugin_path) . '</code></p>';
+
+        if (!empty($runtime_items)) {
+            echo '<h2>Bestanden/mappen in runtime pad</h2><ul>';
+            foreach (array_slice($runtime_items, 0, 60) as $item) {
+                echo '<li><code>' . esc_html($item) . '</code></li>';
+            }
+            echo '</ul>';
+        } else {
+            echo '<p>Geen mappen of bestanden gevonden in het runtime pad.</p>';
+        }
+
+        echo '<p><strong>Advies:</strong> activeer de pluginrij waarvan de activatielink exact eindigt op <code>/octopus-ai-chatbot.php</code> met slechts een mapniveau.</p>';
+        echo '</div>';
+    }
 }
 
 function octopus_ai_get_render_mode()
@@ -312,21 +683,23 @@ function octopus_ai_should_display_chatbot()
 
 function octopus_ai_enqueue_frontend_assets($render_context = null)
 {
-    $css_path = plugin_dir_path(__FILE__) . 'assets/css/chatbot.css';
-    $js_path = plugin_dir_path(__FILE__) . 'assets/js/chatbot.js';
+    $base_path = octopus_ai_get_runtime_base_path();
+    $base_url = octopus_ai_get_runtime_base_url();
+    $css_path = $base_path . 'assets/css/chatbot.css';
+    $js_path = $base_path . 'assets/js/chatbot.js';
     $css_ver = file_exists($css_path) ? filemtime($css_path) : '1.0';
     $js_ver = file_exists($js_path) ? filemtime($js_path) : '1.0';
 
     wp_enqueue_style(
         'octopus-ai-chatbot-style',
-        plugin_dir_url(__FILE__) . 'assets/css/chatbot.css',
+        $base_url . 'assets/css/chatbot.css',
         array(),
         $css_ver
     );
 
     wp_enqueue_script(
         'octopus-ai-chatbot-script',
-        plugin_dir_url(__FILE__) . 'assets/js/chatbot.js',
+        $base_url . 'assets/js/chatbot.js',
         array('jquery'),
         $js_ver,
         true
@@ -351,6 +724,40 @@ function octopus_ai_enqueue_frontend_assets($render_context = null)
             'logo_url' => esc_url(get_option('octopus_ai_logo_url')),
             'primary_color' => get_option('octopus_ai_primary_color', '#0f6c95'),
             'header_text_color' => get_option('octopus_ai_header_text_color', '#ffffff'),
+            'topic_terms' => (function () {
+                if (!function_exists('octopus_ai_get_topic_terms_map')) {
+                    return array();
+                }
+
+                $raw_map = octopus_ai_get_topic_terms_map();
+                if (!is_array($raw_map)) {
+                    return array();
+                }
+
+                $allowed_topics = array('klantenportaal', 'boekhoudprogramma');
+                $sanitized = array();
+
+                foreach ($allowed_topics as $topic_key) {
+                    if (!isset($raw_map[$topic_key]) || !is_array($raw_map[$topic_key])) {
+                        continue;
+                    }
+
+                    $terms = array();
+                    foreach ($raw_map[$topic_key] as $term) {
+                        $term = sanitize_text_field((string) $term);
+                        if ($term === '' || in_array($term, $terms, true)) {
+                            continue;
+                        }
+                        $terms[] = $term;
+                    }
+
+                    if (!empty($terms)) {
+                        $sanitized[$topic_key] = $terms;
+                    }
+                }
+
+                return $sanitized;
+            })(),
             'welcome_message' => (function () use ($is_french) {
                 $custom_nl = get_option('octopus_ai_welcome_message_nl');
                 $custom_fr = get_option('octopus_ai_welcome_message_fr');
@@ -381,6 +788,9 @@ function octopus_ai_enqueue_frontend_assets($render_context = null)
                 'fallback_prefix' => $is_french ? 'ℹ️ Tu trouveras peut-être la réponse dans notre manuel :' : 'ℹ️ Misschien vind je het antwoord wel in onze handleiding:',
                 'fallback_button' => $is_french ? 'Voir dans le manuel' : 'Bekijk dit in de handleiding',
                 'fallback_trigger' => $is_french ? "Désolé, je ne peux pas t’aider avec ça." : 'Sorry, daar kan ik je niet mee helpen.',
+                'switch_yes' => $is_french ? 'Oui, basculer' : 'Ja, overschakelen',
+                'switch_no' => $is_french ? 'Non, rester ici' : 'Nee, hier blijven',
+                'switch_stay_notice' => $is_french ? "D'accord, je reste dans le flux actuel." : 'Prima, ik blijf in je huidige flow.',
                 'api_error' => $is_french ? "❌ Une erreur s'est produite lors de la récupération de la réponse." : '❌ Er ging iets mis met het ophalen van het antwoord.',
             ),
         )
@@ -398,6 +808,21 @@ function octopus_ai_normalize_embedded_widget_config($config = array())
         'primary_color' => '',
         'header_text_color' => '',
         'welcome_message' => '',
+        'font_family' => '',
+        'header_font_size' => 16,
+        'header_font_weight' => '600',
+        'body_font_size' => 14,
+        'message_radius' => 12,
+        'user_message_bg' => '',
+        'user_message_text' => '',
+        'bot_message_bg' => '',
+        'bot_message_text' => '',
+        'input_bg_color' => '',
+        'input_text_color' => '',
+        'input_border_color' => '',
+        'button_bg_color' => '',
+        'button_text_color' => '',
+        'button_radius' => 20,
     );
 
     if (!is_array($config)) {
@@ -412,11 +837,37 @@ function octopus_ai_normalize_embedded_widget_config($config = array())
     $normalized['radius'] = min(28, max(8, (int) $normalized['radius']));
     $normalized['show_topic_selector'] = (bool) $normalized['show_topic_selector'];
     $normalized['show_reset_button'] = (bool) $normalized['show_reset_button'];
+    $normalized['font_family'] = substr(sanitize_text_field((string) $normalized['font_family']), 0, 120);
+    $normalized['header_font_size'] = min(24, max(12, (int) $normalized['header_font_size']));
+    $normalized['body_font_size'] = min(18, max(12, (int) $normalized['body_font_size']));
+    $normalized['message_radius'] = min(24, max(6, (int) $normalized['message_radius']));
+    $normalized['button_radius'] = min(26, max(8, (int) $normalized['button_radius']));
+
+    $allowed_header_weights = array('400', '500', '600', '700', '800');
+    $header_weight = (string) $normalized['header_font_weight'];
+    $normalized['header_font_weight'] = in_array($header_weight, $allowed_header_weights, true) ? $header_weight : '600';
 
     $primary = sanitize_hex_color((string) $normalized['primary_color']);
     $header = sanitize_hex_color((string) $normalized['header_text_color']);
     $normalized['primary_color'] = is_string($primary) ? $primary : '';
     $normalized['header_text_color'] = is_string($header) ? $header : '';
+
+    $color_keys = array(
+        'user_message_bg',
+        'user_message_text',
+        'bot_message_bg',
+        'bot_message_text',
+        'input_bg_color',
+        'input_text_color',
+        'input_border_color',
+        'button_bg_color',
+        'button_text_color',
+    );
+
+    foreach ($color_keys as $color_key) {
+        $sanitized = sanitize_hex_color((string) $normalized[$color_key]);
+        $normalized[$color_key] = is_string($sanitized) ? $sanitized : '';
+    }
 
     return $normalized;
 }
@@ -439,6 +890,11 @@ function octopus_ai_render_embedded_chatbot_markup($config = array())
         'data-octopus-chatbot-widget="1"',
         'data-widget-height="' . (int) $config['height'] . '"',
         'data-widget-radius="' . (int) $config['radius'] . '"',
+        'data-widget-header-font-size="' . (int) $config['header_font_size'] . '"',
+        'data-widget-header-font-weight="' . esc_attr($config['header_font_weight']) . '"',
+        'data-widget-body-font-size="' . (int) $config['body_font_size'] . '"',
+        'data-widget-message-radius="' . (int) $config['message_radius'] . '"',
+        'data-widget-button-radius="' . (int) $config['button_radius'] . '"',
         'data-show-topic-selector="' . ($config['show_topic_selector'] ? '1' : '0') . '"',
         'data-show-reset-button="' . ($config['show_reset_button'] ? '1' : '0') . '"',
     );
@@ -454,6 +910,36 @@ function octopus_ai_render_embedded_chatbot_markup($config = array())
     }
     if ($config['header_text_color'] !== '') {
         $attributes[] = 'data-widget-header-text-color="' . esc_attr($config['header_text_color']) . '"';
+    }
+    if ($config['font_family'] !== '') {
+        $attributes[] = 'data-widget-font-family="' . esc_attr($config['font_family']) . '"';
+    }
+    if ($config['user_message_bg'] !== '') {
+        $attributes[] = 'data-widget-user-message-bg="' . esc_attr($config['user_message_bg']) . '"';
+    }
+    if ($config['user_message_text'] !== '') {
+        $attributes[] = 'data-widget-user-message-text="' . esc_attr($config['user_message_text']) . '"';
+    }
+    if ($config['bot_message_bg'] !== '') {
+        $attributes[] = 'data-widget-bot-message-bg="' . esc_attr($config['bot_message_bg']) . '"';
+    }
+    if ($config['bot_message_text'] !== '') {
+        $attributes[] = 'data-widget-bot-message-text="' . esc_attr($config['bot_message_text']) . '"';
+    }
+    if ($config['input_bg_color'] !== '') {
+        $attributes[] = 'data-widget-input-bg-color="' . esc_attr($config['input_bg_color']) . '"';
+    }
+    if ($config['input_text_color'] !== '') {
+        $attributes[] = 'data-widget-input-text-color="' . esc_attr($config['input_text_color']) . '"';
+    }
+    if ($config['input_border_color'] !== '') {
+        $attributes[] = 'data-widget-input-border-color="' . esc_attr($config['input_border_color']) . '"';
+    }
+    if ($config['button_bg_color'] !== '') {
+        $attributes[] = 'data-widget-button-bg-color="' . esc_attr($config['button_bg_color']) . '"';
+    }
+    if ($config['button_text_color'] !== '') {
+        $attributes[] = 'data-widget-button-text-color="' . esc_attr($config['button_text_color']) . '"';
     }
 
     return '<div ' . implode(' ', $attributes) . '></div>';
@@ -471,6 +957,21 @@ function octopus_ai_chatbot_shortcode($atts = array())
             'primary_color' => '',
             'header_text_color' => '',
             'welcome_message' => '',
+            'font_family' => '',
+            'header_font_size' => '16',
+            'header_font_weight' => '600',
+            'body_font_size' => '14',
+            'message_radius' => '12',
+            'user_message_bg' => '',
+            'user_message_text' => '',
+            'bot_message_bg' => '',
+            'bot_message_text' => '',
+            'input_bg_color' => '',
+            'input_text_color' => '',
+            'input_border_color' => '',
+            'button_bg_color' => '',
+            'button_text_color' => '',
+            'button_radius' => '20',
         ),
         is_array($atts) ? $atts : array(),
         'octopus_ai_chatbot'
@@ -485,6 +986,21 @@ function octopus_ai_chatbot_shortcode($atts = array())
         'primary_color' => $atts['primary_color'],
         'header_text_color' => $atts['header_text_color'],
         'welcome_message' => $atts['welcome_message'],
+        'font_family' => $atts['font_family'],
+        'header_font_size' => (int) $atts['header_font_size'],
+        'header_font_weight' => (string) $atts['header_font_weight'],
+        'body_font_size' => (int) $atts['body_font_size'],
+        'message_radius' => (int) $atts['message_radius'],
+        'user_message_bg' => $atts['user_message_bg'],
+        'user_message_text' => $atts['user_message_text'],
+        'bot_message_bg' => $atts['bot_message_bg'],
+        'bot_message_text' => $atts['bot_message_text'],
+        'input_bg_color' => $atts['input_bg_color'],
+        'input_text_color' => $atts['input_text_color'],
+        'input_border_color' => $atts['input_border_color'],
+        'button_bg_color' => $atts['button_bg_color'],
+        'button_text_color' => $atts['button_text_color'],
+        'button_radius' => (int) $atts['button_radius'],
     );
 
     return octopus_ai_render_embedded_chatbot_markup($config);
@@ -544,3 +1060,14 @@ function octopus_ai_create_log_table()
 }
 
 register_activation_hook(__FILE__, 'octopus_ai_create_log_table');
+
+if (!function_exists('octopus_ai_on_plugin_deactivation')) {
+    function octopus_ai_on_plugin_deactivation()
+    {
+        if (function_exists('octopus_ai_clear_background_jobs')) {
+            octopus_ai_clear_background_jobs();
+        }
+    }
+}
+
+register_deactivation_hook(__FILE__, 'octopus_ai_on_plugin_deactivation');

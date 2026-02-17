@@ -1099,6 +1099,17 @@ function octopus_ai_chatbot_callback($request)
     $message = sanitize_text_field((string) $request->get_param('message'));
     $history = octopus_ai_sanitize_client_history($request->get_param('history') ?? [], 10);
     $topic = sanitize_key((string) $request->get_param('topic'));
+    $skip_topic_mismatch_raw = $request->get_param('skip_topic_mismatch');
+    $skip_topic_mismatch = false;
+    if (is_bool($skip_topic_mismatch_raw)) {
+        $skip_topic_mismatch = $skip_topic_mismatch_raw;
+    } else {
+        $skip_topic_mismatch = in_array(
+            strtolower(trim((string) $skip_topic_mismatch_raw)),
+            array('1', 'true', 'yes', 'on'),
+            true
+        );
+    }
     $allowed_topics = ['klantenportaal', 'boekhoudprogramma'];
     if (!in_array($topic, $allowed_topics, true)) {
         $topic = '';
@@ -1139,19 +1150,19 @@ function octopus_ai_chatbot_callback($request)
         ]);
     }
 
-    $topic_mismatch = octopus_ai_detect_topic_mismatch($message, $topic);
+    $topic_mismatch = (!$skip_topic_mismatch) ? octopus_ai_detect_topic_mismatch($message, $topic) : '';
     if ($topic_mismatch !== '') {
         $current_label = octopus_ai_get_topic_label($topic, $lang);
         $suggested_label = octopus_ai_get_topic_label($topic_mismatch, $lang);
 
         $mismatch_answer = ($lang === 'FR')
             ? sprintf(
-                "Tu es actuellement dans le flux %s, mais ta question semble concerner %s. Clique sur Rechoisir et choisis le bon flux pour recevoir une reponse correcte.",
+                "Tu es actuellement dans le flux %s, mais ta question semble concerner %s. Souhaites-tu basculer vers ce flux ?",
                 $current_label,
                 $suggested_label
             )
             : sprintf(
-                "Je zit momenteel in de flow %s, maar je vraag lijkt over %s te gaan. Klik op Kies opnieuw en kies de juiste flow voor een correct antwoord.",
+                "Je zit momenteel in de flow %s, maar je vraag lijkt over %s te gaan. Wil je overschakelen naar die flow?",
                 $current_label,
                 $suggested_label
             );

@@ -16,6 +16,12 @@ document.addEventListener('DOMContentLoaded', function () {
     return value === '1' || value === 'true' || value === 'yes' || value === true;
   }
 
+  function sanitizeFontFamily(value) {
+    const candidate = String(value || '').trim();
+    if (!candidate) return '';
+    return candidate.replace(/[^a-zA-Z0-9,\s"'_-]/g, '').slice(0, 120);
+  }
+
   function escapeHtml(value) {
     return String(value || '').replace(/[&<>"']/g, function (character) {
       switch (character) {
@@ -258,8 +264,11 @@ document.addEventListener('DOMContentLoaded', function () {
           descFr: 'Questions sur la comptabilite, TVA ou rapports dans le logiciel.'
         }
       ];
+      this.topicTermsMap = this.buildTopicTermsMap(this.settings.topic_terms);
       this.pendingSuggestedTopic = '';
       this.previousTopicBeforeSelection = '';
+      this.pendingTopicDecision = null;
+      this.dismissedSuggestedTopics = new Set();
     }
 
     init() {
@@ -271,7 +280,7 @@ document.addEventListener('DOMContentLoaded', function () {
       this.updateComposerState();
 
       if (this.showTopicSelector && !this.selectedTopic) {
-        this.topicPanel.classList.add('visible', 'is-required');
+        this.topicPanel.classList.add('visible');
       }
 
       if (this.isEmbedded) {
@@ -300,7 +309,22 @@ document.addEventListener('DOMContentLoaded', function () {
           showTopicSelector: true,
           showResetButton: true,
           primaryColor: '',
-          headerTextColor: ''
+          headerTextColor: '',
+          fontFamily: '',
+          headerFontSize: 16,
+          headerFontWeight: '600',
+          bodyFontSize: 14,
+          messageRadius: 12,
+          userMessageBg: '',
+          userMessageText: '',
+          botMessageBg: '',
+          botMessageText: '',
+          inputBgColor: '',
+          inputTextColor: '',
+          inputBorderColor: '',
+          buttonBgColor: '',
+          buttonTextColor: '',
+          buttonRadius: 20
         };
       }
 
@@ -312,7 +336,22 @@ document.addEventListener('DOMContentLoaded', function () {
         showTopicSelector: toBool(this.mount.getAttribute('data-show-topic-selector'), true),
         showResetButton: toBool(this.mount.getAttribute('data-show-reset-button'), true),
         primaryColor: (this.mount.getAttribute('data-widget-primary-color') || '').trim(),
-        headerTextColor: (this.mount.getAttribute('data-widget-header-text-color') || '').trim()
+        headerTextColor: (this.mount.getAttribute('data-widget-header-text-color') || '').trim(),
+        fontFamily: sanitizeFontFamily(this.mount.getAttribute('data-widget-font-family') || ''),
+        headerFontSize: parseIntInRange(this.mount.getAttribute('data-widget-header-font-size'), 12, 24, 16),
+        headerFontWeight: (this.mount.getAttribute('data-widget-header-font-weight') || '600').trim(),
+        bodyFontSize: parseIntInRange(this.mount.getAttribute('data-widget-body-font-size'), 12, 18, 14),
+        messageRadius: parseIntInRange(this.mount.getAttribute('data-widget-message-radius'), 6, 24, 12),
+        userMessageBg: (this.mount.getAttribute('data-widget-user-message-bg') || '').trim(),
+        userMessageText: (this.mount.getAttribute('data-widget-user-message-text') || '').trim(),
+        botMessageBg: (this.mount.getAttribute('data-widget-bot-message-bg') || '').trim(),
+        botMessageText: (this.mount.getAttribute('data-widget-bot-message-text') || '').trim(),
+        inputBgColor: (this.mount.getAttribute('data-widget-input-bg-color') || '').trim(),
+        inputTextColor: (this.mount.getAttribute('data-widget-input-text-color') || '').trim(),
+        inputBorderColor: (this.mount.getAttribute('data-widget-input-border-color') || '').trim(),
+        buttonBgColor: (this.mount.getAttribute('data-widget-button-bg-color') || '').trim(),
+        buttonTextColor: (this.mount.getAttribute('data-widget-button-text-color') || '').trim(),
+        buttonRadius: parseIntInRange(this.mount.getAttribute('data-widget-button-radius'), 8, 26, 20)
       };
     }
 
@@ -334,6 +373,23 @@ document.addEventListener('DOMContentLoaded', function () {
       this.headerTextColor = this.config.headerTextColor || this.settings.header_text_color || '#ffffff';
       this.headerTitle = this.config.title || this.settings.brand_name || 'AI Chatbot';
       this.fallbackButtonLabel = this.i18n.fallback_button || 'Bekijk dit in de handleiding';
+      this.fontFamily = sanitizeFontFamily(this.config.fontFamily || '');
+      this.headerFontSize = parseIntInRange(this.config.headerFontSize, 12, 24, 16);
+      this.headerFontWeight = ['400', '500', '600', '700', '800'].includes(String(this.config.headerFontWeight))
+        ? String(this.config.headerFontWeight)
+        : '600';
+      this.bodyFontSize = parseIntInRange(this.config.bodyFontSize, 12, 18, 14);
+      this.messageRadius = parseIntInRange(this.config.messageRadius, 6, 24, 12);
+      this.userMessageBg = this.config.userMessageBg || '';
+      this.userMessageText = this.config.userMessageText || '';
+      this.botMessageBg = this.config.botMessageBg || '';
+      this.botMessageText = this.config.botMessageText || '';
+      this.inputBgColor = this.config.inputBgColor || '';
+      this.inputTextColor = this.config.inputTextColor || '';
+      this.inputBorderColor = this.config.inputBorderColor || '';
+      this.buttonBgColor = this.config.buttonBgColor || this.primaryColor;
+      this.buttonTextColor = this.config.buttonTextColor || '';
+      this.buttonRadius = parseIntInRange(this.config.buttonRadius, 8, 26, 20);
 
       if (this.isEmbedded) {
         this.root = document.createElement('div');
@@ -347,6 +403,21 @@ document.addEventListener('DOMContentLoaded', function () {
 
       this.root.style.setProperty('--primary-color', this.primaryColor);
       this.root.style.setProperty('--header-text-color', this.headerTextColor);
+      this.root.style.setProperty('--octopus-header-font-size', this.headerFontSize + 'px');
+      this.root.style.setProperty('--octopus-header-font-weight', this.headerFontWeight);
+      this.root.style.setProperty('--octopus-body-font-size', this.bodyFontSize + 'px');
+      this.root.style.setProperty('--octopus-message-radius', this.messageRadius + 'px');
+      this.root.style.setProperty('--octopus-button-radius', this.buttonRadius + 'px');
+      this.root.style.setProperty('--octopus-button-bg', this.buttonBgColor);
+      if (this.fontFamily) this.root.style.setProperty('--octopus-chat-font-family', this.fontFamily);
+      if (this.userMessageBg) this.root.style.setProperty('--octopus-user-message-bg', this.userMessageBg);
+      if (this.userMessageText) this.root.style.setProperty('--octopus-user-message-text', this.userMessageText);
+      if (this.botMessageBg) this.root.style.setProperty('--octopus-bot-message-bg', this.botMessageBg);
+      if (this.botMessageText) this.root.style.setProperty('--octopus-bot-message-text', this.botMessageText);
+      if (this.inputBgColor) this.root.style.setProperty('--octopus-input-bg', this.inputBgColor);
+      if (this.inputTextColor) this.root.style.setProperty('--octopus-input-text', this.inputTextColor);
+      if (this.inputBorderColor) this.root.style.setProperty('--octopus-input-border', this.inputBorderColor);
+      if (this.buttonTextColor) this.root.style.setProperty('--octopus-button-text', this.buttonTextColor);
 
       if (this.isEmbedded) {
         this.root.style.setProperty('--octopus-widget-height', this.config.height + 'px');
@@ -589,6 +660,66 @@ document.addEventListener('DOMContentLoaded', function () {
       return this.lang === 'FR' ? choice.descFr : choice.descNl;
     }
 
+    normalizeTopicText(value) {
+      return String(value || '')
+        .toLowerCase()
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .replace(/[^a-z0-9\s-]/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+    }
+
+    buildTopicTermsMap(rawMap) {
+      const defaults = {
+        klantenportaal: ['klantenportaal', 'platform', 'plateforme', 'plateforme digitale interactive', 'pdi', 'portal', 'portail', 'klant', 'client', 'factuur', 'facture', 'betaling', 'paiement', 'upload'],
+        boekhoudprogramma: ['boekhoud', 'boekhouding', 'boekhoudprogramma', 'compta', 'comptabilite', 'btw', 'tva', 'journaal', 'journal', 'balans', 'rapport']
+      };
+
+      const source = rawMap && typeof rawMap === 'object' ? rawMap : {};
+      const map = {};
+
+      this.topicChoices.forEach((choice) => {
+        const key = choice.key;
+        const candidateTerms = Array.isArray(source[key]) && source[key].length ? source[key] : (defaults[key] || []);
+        const cleanTerms = [];
+        candidateTerms.forEach((term) => {
+          const normalized = this.normalizeTopicText(term);
+          if (!normalized || cleanTerms.includes(normalized)) return;
+          cleanTerms.push(normalized);
+        });
+        if (cleanTerms.length) {
+          map[key] = cleanTerms;
+        }
+      });
+
+      return map;
+    }
+
+    detectTopicFromText(messageText) {
+      const normalized = this.normalizeTopicText(messageText);
+      if (!normalized) return '';
+
+      const scores = [];
+      this.topicChoices.forEach((choice) => {
+        const terms = Array.isArray(this.topicTermsMap[choice.key]) ? this.topicTermsMap[choice.key] : [];
+        let score = 0;
+        terms.forEach((term) => {
+          if (term && normalized.indexOf(term) !== -1) {
+            score += 1;
+          }
+        });
+        scores.push({ key: choice.key, score: score });
+      });
+
+      scores.sort((a, b) => b.score - a.score);
+      const best = scores[0] || { key: '', score: 0 };
+      const second = scores[1] || { key: '', score: 0 };
+      if (!best.key || best.score <= 0) return '';
+      if (second.score > 0 && best.score <= second.score) return '';
+      return best.key;
+    }
+
     ensureTopicForSilentMode() {
       if (this.showTopicSelector) return;
       const fallback = this.topicChoices[0];
@@ -640,6 +771,7 @@ document.addEventListener('DOMContentLoaded', function () {
 
       const previous = this.selectedTopic || this.previousTopicBeforeSelection || '';
       this.selectedTopic = key;
+      this.dismissedSuggestedTopics.clear();
       this.pendingSuggestedTopic = '';
       this.previousTopicBeforeSelection = '';
       sessionStorage.setItem(this.topicStorageKey, key);
@@ -671,6 +803,214 @@ document.addEventListener('DOMContentLoaded', function () {
       setTimeout(() => {
         if (!this.chatInput.disabled) this.chatInput.focus();
       }, 80);
+    }
+
+    clearPendingTopicDecision(markClosed) {
+      if (!this.pendingTopicDecision) return;
+
+      const decision = this.pendingTopicDecision;
+      this.pendingTopicDecision = null;
+
+      if (!decision.actions || !(decision.actions instanceof Element)) return;
+
+      const buttons = decision.actions.querySelectorAll('button');
+      buttons.forEach((button) => {
+        button.disabled = true;
+        button.classList.add('is-disabled');
+      });
+
+      if (markClosed) {
+        const closedText = this.lang === 'FR'
+          ? 'Decision ignoree. Pose ta question suivante.'
+          : 'Keuze vervallen. Stel gerust je volgende vraag.';
+        decision.actions.innerHTML = '<span class="topic-switch-note">' + escapeHtml(closedText) + '</span>';
+      }
+    }
+
+    createTypingIndicator() {
+      const typing = document.createElement('div');
+      typing.classList.add('typing-indicator');
+      typing.innerHTML = '<span class="dot"></span><span class="dot"></span><span class="dot"></span>';
+      this.chatMessages.appendChild(typing);
+      this.scrollMessagesToBottom(true);
+      return typing;
+    }
+
+    showTopicMismatchDecision(messageText, payload, suggested) {
+      if (!this.showTopicSelector || !suggested) {
+        this.addMessage(payload.answer || (this.i18n.api_error || 'Er ging iets mis met het ophalen van het antwoord.'), 'bot', { chatId: payload.chatId });
+        return;
+      }
+
+      this.clearPendingTopicDecision(true);
+
+      const currentMeta = this.topicChoices.find((choice) => choice.key === this.selectedTopic) || null;
+      const currentLabel = currentMeta ? this.getTopicLabel(currentMeta) : (this.lang === 'FR' ? 'flux actuel' : 'huidige flow');
+      const suggestedLabel = this.getTopicLabel(suggested);
+      const prompt = this.lang === 'FR'
+        ? 'Ta question semble plutot concerner **' + suggestedLabel + '**. Tu es actuellement dans **' + currentLabel + '**. Veux-tu basculer ?'
+        : 'Je vraag lijkt eerder over **' + suggestedLabel + '** te gaan. Je zit momenteel in **' + currentLabel + '**. Wil je overschakelen?';
+      const switchLabel = this.i18n.switch_yes || (this.lang === 'FR' ? 'Oui, basculer' : 'Ja, overschakelen');
+      const keepLabel = this.i18n.switch_no || (this.lang === 'FR' ? 'Non, rester ici' : 'Nee, hier blijven');
+
+      const promptNode = this.addMessage(prompt, 'bot', { chatId: 0 });
+      if (!(promptNode instanceof Element)) {
+        return;
+      }
+
+      const actions = document.createElement('div');
+      actions.className = 'topic-switch-actions';
+      actions.innerHTML = ''
+        + '<button type="button" class="topic-switch-btn is-primary" data-action="switch">' + escapeHtml(switchLabel) + '</button>'
+        + '<button type="button" class="topic-switch-btn is-secondary" data-action="stay">' + escapeHtml(keepLabel) + '</button>';
+      promptNode.appendChild(actions);
+      this.scrollMessagesToBottom(true);
+
+      const decision = { actions: actions };
+      this.pendingTopicDecision = decision;
+
+      const onChoice = async (mode) => {
+        if (this.pendingTopicDecision !== decision) return;
+        this.pendingTopicDecision = null;
+
+        const buttons = actions.querySelectorAll('button');
+        buttons.forEach((button) => {
+          button.disabled = true;
+          button.classList.add('is-disabled');
+        });
+
+        this.setSendingState(true);
+        const typing = this.createTypingIndicator();
+
+        try {
+          let followPayload = null;
+          if (mode === 'switch') {
+            this.setTopic(suggested.key, true);
+            followPayload = await this.requestBotPayload(messageText, suggested.key);
+          } else {
+            const keepNotice = this.i18n.switch_stay_notice || (
+              this.lang === 'FR'
+                ? "D'accord, je reste dans le flux actuel."
+                : 'Prima, ik blijf in je huidige flow.'
+            );
+            this.addMessage(keepNotice, 'bot', { chatId: 0 });
+            followPayload = await this.requestBotPayload(
+              messageText,
+              this.selectedTopic,
+              { skipTopicMismatch: true }
+            );
+          }
+
+          const followAnswer = (followPayload && followPayload.answer) || payload.answer || (this.i18n.api_error || 'Er ging iets mis met het ophalen van het antwoord.');
+          this.addMessage(followAnswer, 'bot', { chatId: followPayload ? followPayload.chatId : 0 });
+          actions.innerHTML = '<span class="topic-switch-note">' + escapeHtml(this.lang === 'FR' ? 'Choix applique.' : 'Keuze toegepast.') + '</span>';
+        } catch (error) {
+          this.addMessage(this.i18n.api_error || 'Er ging iets mis met het ophalen van het antwoord.', 'bot', { chatId: 0 });
+          actions.innerHTML = '<span class="topic-switch-note">' + escapeHtml(this.lang === 'FR' ? 'Proposition non traitee.' : 'Keuze kon niet verwerkt worden.') + '</span>';
+        } finally {
+          typing.remove();
+          this.setSendingState(false);
+          this.updateComposerState();
+        }
+      };
+
+      actions.querySelector('[data-action="switch"]').addEventListener('click', () => onChoice('switch'));
+      actions.querySelector('[data-action="stay"]').addEventListener('click', () => onChoice('stay'));
+    }
+
+    showTopicSuggestionDecision(context) {
+      const config = context && typeof context === 'object' ? context : {};
+      const suggested = config.suggested && typeof config.suggested === 'object' ? config.suggested : null;
+      const messageText = String(config.messageText || '').trim();
+      const fallbackAnswer = String(config.fallbackAnswer || '').trim();
+
+      if (!this.showTopicSelector || !suggested || this.selectedTopic) return;
+      if (!messageText) return;
+      if (this.dismissedSuggestedTopics.has(suggested.key)) return;
+
+      this.clearPendingTopicDecision(true);
+
+      const suggestedLabel = this.getTopicLabel(suggested);
+      const prompt = this.lang === 'FR'
+        ? 'Ta question semble concerner **' + suggestedLabel + '**. Veux-tu definir ce flux pour les prochaines reponses ?'
+        : 'Je vraag lijkt over **' + suggestedLabel + '** te gaan. Wil je deze flow instellen voor volgende antwoorden?';
+      const yesLabel = this.lang === 'FR' ? 'Oui, definir' : 'Ja, instellen';
+      const noLabel = this.lang === 'FR' ? 'Non, pas maintenant' : 'Nee, nu niet';
+
+      const promptNode = this.addMessage(prompt, 'bot', { chatId: 0 });
+      if (!(promptNode instanceof Element)) {
+        return;
+      }
+
+      const actions = document.createElement('div');
+      actions.className = 'topic-switch-actions';
+      actions.innerHTML = ''
+        + '<button type="button" class="topic-switch-btn is-primary" data-action="set">' + escapeHtml(yesLabel) + '</button>'
+        + '<button type="button" class="topic-switch-btn is-secondary" data-action="skip">' + escapeHtml(noLabel) + '</button>';
+      promptNode.appendChild(actions);
+      this.scrollMessagesToBottom(true);
+
+      const decision = { actions: actions };
+      this.pendingTopicDecision = decision;
+
+      const finalize = (note) => {
+        if (this.pendingTopicDecision === decision) {
+          this.pendingTopicDecision = null;
+        }
+        actions.innerHTML = '<span class="topic-switch-note">' + escapeHtml(note) + '</span>';
+      };
+
+      const onChoice = async (mode) => {
+        if (this.pendingTopicDecision !== decision) return;
+
+        const buttons = actions.querySelectorAll('button');
+        buttons.forEach((button) => {
+          button.disabled = true;
+          button.classList.add('is-disabled');
+        });
+
+        const isSet = mode === 'set';
+        if (isSet) {
+          this.dismissedSuggestedTopics.delete(suggested.key);
+          this.setTopic(suggested.key, true);
+        } else {
+          this.dismissedSuggestedTopics.add(suggested.key);
+          finalize(this.lang === 'FR' ? "D'accord, je continue sans flux fixe." : 'Prima, ik ga verder zonder vaste flow.');
+        }
+
+        this.setSendingState(true);
+        const typing = this.createTypingIndicator();
+
+        try {
+          const followPayload = await this.requestBotPayload(
+            messageText,
+            suggested.key,
+            { skipTopicMismatch: true }
+          );
+          const followAnswer = String((followPayload && followPayload.answer) || '').trim();
+          const shouldAppendFollowAnswer = followAnswer !== '' && (!isSet || followAnswer !== fallbackAnswer);
+
+          if (shouldAppendFollowAnswer) {
+            this.addMessage(followAnswer, 'bot', { chatId: followPayload ? followPayload.chatId : 0 });
+          }
+
+          if (isSet) {
+            finalize(this.lang === 'FR' ? 'Flux defini.' : 'Flow ingesteld.');
+          }
+        } catch (error) {
+          if (!isSet) {
+            this.addMessage(this.i18n.api_error || 'Er ging iets mis met het ophalen van het antwoord.', 'bot', { chatId: 0 });
+          }
+          finalize(this.lang === 'FR' ? 'Proposition non traitee.' : 'Keuze kon niet verwerkt worden.');
+        } finally {
+          typing.remove();
+          this.setSendingState(false);
+          this.updateComposerState();
+        }
+      };
+
+      actions.querySelector('[data-action="set"]').addEventListener('click', () => onChoice('set'));
+      actions.querySelector('[data-action="skip"]').addEventListener('click', () => onChoice('skip'));
     }
 
     isNearMessagesBottom(thresholdPx) {
@@ -794,6 +1134,7 @@ document.addEventListener('DOMContentLoaded', function () {
       if (shouldAutoScroll) {
         this.scrollMessagesToBottom(true);
       }
+      return message;
     }
 
     addMessage(content, sender, options) {
@@ -805,8 +1146,9 @@ document.addEventListener('DOMContentLoaded', function () {
 
       if (!payload.content.trim()) return;
       this.messages.push(payload);
-      this.renderMessage(payload.content, payload.sender, { chatId: payload.chatId });
+      const node = this.renderMessage(payload.content, payload.sender, { chatId: payload.chatId });
       this.saveMessages();
+      return node;
     }
 
     serializeHistoryForApi() {
@@ -819,14 +1161,18 @@ document.addEventListener('DOMContentLoaded', function () {
         }));
     }
 
-    async requestBotPayload(messageText, topicKey) {
+    async requestBotPayload(messageText, topicKey, options) {
+      const config = options && typeof options === 'object' ? options : {};
+      const skipTopicMismatch = !!config.skipTopicMismatch;
+
       const response = await fetch(this.restEndpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           message: messageText,
           history: this.serializeHistoryForApi(),
-          topic: topicKey || this.selectedTopic
+          topic: topicKey || this.selectedTopic,
+          skip_topic_mismatch: skipTopicMismatch
         })
       });
 
@@ -851,6 +1197,7 @@ document.addEventListener('DOMContentLoaded', function () {
 
     async sendMessage() {
       this.ensureTopicForSilentMode();
+      this.clearPendingTopicDecision(true);
 
       if (this.showTopicSelector && !this.selectedTopic) {
         this.topicPanel.classList.add('visible');
@@ -869,41 +1216,37 @@ document.addEventListener('DOMContentLoaded', function () {
       this.setSendingState(true);
       this.updateComposerState();
 
-      const typing = document.createElement('div');
-      typing.classList.add('typing-indicator');
-      typing.innerHTML = '<span class="dot"></span><span class="dot"></span><span class="dot"></span>';
-      this.chatMessages.appendChild(typing);
-      this.scrollMessagesToBottom(true);
+      const typing = this.createTypingIndicator();
 
       try {
         const payload = await this.requestBotPayload(text, this.selectedTopic);
         const answer = payload.answer || (this.i18n.api_error || 'Er ging iets mis met het ophalen van het antwoord.');
 
         const suggested = this.topicChoices.find((choice) => choice.key === payload.suggestedTopic) || null;
-        const canAutoSwitch = payload.status === 'topic_mismatch' && this.showTopicSelector && !!suggested;
+        const shouldConfirmSwitch = payload.status === 'topic_mismatch' && this.showTopicSelector && !!suggested;
 
-        if (canAutoSwitch) {
-          this.setTopic(suggested.key, false);
+        typing.remove();
+        if (shouldConfirmSwitch) {
+          this.showTopicMismatchDecision(text, payload, suggested);
+          return;
+        }
 
-          const switchNotice = this.lang === 'FR'
-            ? 'Je bascule automatiquement vers **' + this.getTopicLabel(suggested) + '** pour repondre correctement.'
-            : 'Ik schakel automatisch over naar **' + this.getTopicLabel(suggested) + '** om je vraag correct te beantwoorden.';
-          this.addMessage(switchNotice, 'bot', { chatId: 0 });
+        this.addMessage(answer, 'bot', { chatId: payload.chatId });
 
-          const followPayload = await this.requestBotPayload(text, suggested.key);
-          const followAnswer = followPayload.answer || answer;
-
-          typing.remove();
-          this.addMessage(followAnswer, 'bot', { chatId: followPayload.chatId });
-        } else {
-          typing.remove();
-          this.addMessage(answer, 'bot', { chatId: payload.chatId });
-
-          if (payload.status === 'topic_mismatch' && this.showTopicSelector) {
-            this.requestTopicSelection({
-              forceChoice: true,
-              suggestedTopic: payload.suggestedTopic,
-              announce: false
+        if (payload.status === 'topic_mismatch' && this.showTopicSelector) {
+          this.requestTopicSelection({
+            forceChoice: false,
+            suggestedTopic: payload.suggestedTopic,
+            announce: false
+          });
+        } else if (this.showTopicSelector && !this.selectedTopic) {
+          const inferredTopicKey = this.detectTopicFromText(text);
+          const inferredTopic = this.topicChoices.find((choice) => choice.key === inferredTopicKey) || null;
+          if (inferredTopic) {
+            this.showTopicSuggestionDecision({
+              suggested: inferredTopic,
+              messageText: text,
+              fallbackAnswer: answer
             });
           }
         }
@@ -967,6 +1310,8 @@ document.addEventListener('DOMContentLoaded', function () {
 
       this.messages = [];
       this.sentFeedback.clear();
+      this.dismissedSuggestedTopics.clear();
+      this.clearPendingTopicDecision(false);
       sessionStorage.removeItem(this.historyStorageKey);
       sessionStorage.removeItem(this.topicStorageKey);
       sessionStorage.removeItem(this.welcomeSessionKey);
@@ -980,7 +1325,7 @@ document.addEventListener('DOMContentLoaded', function () {
       this.updateTopicUi();
 
       if (this.showTopicSelector) {
-        this.requestTopicSelection({ forceChoice: true, announce: false });
+        this.requestTopicSelection({ forceChoice: false, announce: false });
       }
 
       if (this.isEmbedded) {

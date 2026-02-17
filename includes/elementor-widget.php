@@ -167,6 +167,193 @@ if (!function_exists('octopus_ai_register_elementor_widget')) {
                         )
                     );
 
+                    $this->add_control(
+                        'font_family',
+                        array(
+                            'label' => 'Lettertype familie (optioneel)',
+                            'type' => $controls::TEXT,
+                            'placeholder' => 'Bijv. "Roboto, Arial, sans-serif"',
+                            'default' => '',
+                        )
+                    );
+
+                    $this->add_control(
+                        'header_font_size',
+                        array(
+                            'label' => 'Header tekstgrootte (px)',
+                            'type' => $controls::SLIDER,
+                            'size_units' => array('px'),
+                            'range' => array(
+                                'px' => array(
+                                    'min' => 12,
+                                    'max' => 24,
+                                    'step' => 1,
+                                ),
+                            ),
+                            'default' => array(
+                                'unit' => 'px',
+                                'size' => 16,
+                            ),
+                        )
+                    );
+
+                    $this->add_control(
+                        'header_font_weight',
+                        array(
+                            'label' => 'Header tekstdikte',
+                            'type' => $controls::SELECT,
+                            'default' => '600',
+                            'options' => array(
+                                '400' => 'Normaal (400)',
+                                '500' => 'Medium (500)',
+                                '600' => 'Semibold (600)',
+                                '700' => 'Bold (700)',
+                                '800' => 'Extra Bold (800)',
+                            ),
+                        )
+                    );
+
+                    $this->add_control(
+                        'body_font_size',
+                        array(
+                            'label' => 'Bericht tekstgrootte (px)',
+                            'type' => $controls::SLIDER,
+                            'size_units' => array('px'),
+                            'range' => array(
+                                'px' => array(
+                                    'min' => 12,
+                                    'max' => 18,
+                                    'step' => 1,
+                                ),
+                            ),
+                            'default' => array(
+                                'unit' => 'px',
+                                'size' => 14,
+                            ),
+                        )
+                    );
+
+                    $this->add_control(
+                        'message_radius',
+                        array(
+                            'label' => 'Bericht bubble radius (px)',
+                            'type' => $controls::SLIDER,
+                            'size_units' => array('px'),
+                            'range' => array(
+                                'px' => array(
+                                    'min' => 6,
+                                    'max' => 24,
+                                    'step' => 1,
+                                ),
+                            ),
+                            'default' => array(
+                                'unit' => 'px',
+                                'size' => 12,
+                            ),
+                        )
+                    );
+
+                    $this->add_control(
+                        'user_message_bg',
+                        array(
+                            'label' => 'Gebruiker bericht achtergrond',
+                            'type' => $controls::COLOR,
+                            'default' => '',
+                        )
+                    );
+
+                    $this->add_control(
+                        'user_message_text',
+                        array(
+                            'label' => 'Gebruiker bericht tekstkleur',
+                            'type' => $controls::COLOR,
+                            'default' => '',
+                        )
+                    );
+
+                    $this->add_control(
+                        'bot_message_bg',
+                        array(
+                            'label' => 'Bot bericht achtergrond',
+                            'type' => $controls::COLOR,
+                            'default' => '',
+                        )
+                    );
+
+                    $this->add_control(
+                        'bot_message_text',
+                        array(
+                            'label' => 'Bot bericht tekstkleur',
+                            'type' => $controls::COLOR,
+                            'default' => '',
+                        )
+                    );
+
+                    $this->add_control(
+                        'input_bg_color',
+                        array(
+                            'label' => 'Input achtergrondkleur',
+                            'type' => $controls::COLOR,
+                            'default' => '',
+                        )
+                    );
+
+                    $this->add_control(
+                        'input_text_color',
+                        array(
+                            'label' => 'Input tekstkleur',
+                            'type' => $controls::COLOR,
+                            'default' => '',
+                        )
+                    );
+
+                    $this->add_control(
+                        'input_border_color',
+                        array(
+                            'label' => 'Input randkleur',
+                            'type' => $controls::COLOR,
+                            'default' => '',
+                        )
+                    );
+
+                    $this->add_control(
+                        'button_bg_color',
+                        array(
+                            'label' => 'Knop achtergrondkleur',
+                            'type' => $controls::COLOR,
+                            'default' => '',
+                        )
+                    );
+
+                    $this->add_control(
+                        'button_text_color',
+                        array(
+                            'label' => 'Knop tekstkleur',
+                            'type' => $controls::COLOR,
+                            'default' => '',
+                        )
+                    );
+
+                    $this->add_control(
+                        'button_radius',
+                        array(
+                            'label' => 'Knop radius (px)',
+                            'type' => $controls::SLIDER,
+                            'size_units' => array('px'),
+                            'range' => array(
+                                'px' => array(
+                                    'min' => 8,
+                                    'max' => 26,
+                                    'step' => 1,
+                                ),
+                            ),
+                            'default' => array(
+                                'unit' => 'px',
+                                'size' => 20,
+                            ),
+                        )
+                    );
+
                     $this->end_controls_section();
                 }
 
@@ -179,6 +366,10 @@ if (!function_exists('octopus_ai_register_elementor_widget')) {
                     $settings = $this->get_settings_for_display();
                     $height = isset($settings['widget_height']['size']) ? (int) $settings['widget_height']['size'] : 560;
                     $radius = isset($settings['widget_radius']['size']) ? (int) $settings['widget_radius']['size'] : 16;
+                    $header_font_size = isset($settings['header_font_size']['size']) ? (int) $settings['header_font_size']['size'] : 16;
+                    $body_font_size = isset($settings['body_font_size']['size']) ? (int) $settings['body_font_size']['size'] : 14;
+                    $message_radius = isset($settings['message_radius']['size']) ? (int) $settings['message_radius']['size'] : 12;
+                    $button_radius = isset($settings['button_radius']['size']) ? (int) $settings['button_radius']['size'] : 20;
 
                     $config = array(
                         'title' => isset($settings['widget_title']) ? (string) $settings['widget_title'] : '',
@@ -189,6 +380,21 @@ if (!function_exists('octopus_ai_register_elementor_widget')) {
                         'show_reset_button' => isset($settings['show_reset_button']) && $settings['show_reset_button'] === 'yes',
                         'primary_color' => isset($settings['primary_color']) ? (string) $settings['primary_color'] : '',
                         'header_text_color' => isset($settings['header_text_color']) ? (string) $settings['header_text_color'] : '',
+                        'font_family' => isset($settings['font_family']) ? (string) $settings['font_family'] : '',
+                        'header_font_size' => $header_font_size,
+                        'header_font_weight' => isset($settings['header_font_weight']) ? (string) $settings['header_font_weight'] : '600',
+                        'body_font_size' => $body_font_size,
+                        'message_radius' => $message_radius,
+                        'user_message_bg' => isset($settings['user_message_bg']) ? (string) $settings['user_message_bg'] : '',
+                        'user_message_text' => isset($settings['user_message_text']) ? (string) $settings['user_message_text'] : '',
+                        'bot_message_bg' => isset($settings['bot_message_bg']) ? (string) $settings['bot_message_bg'] : '',
+                        'bot_message_text' => isset($settings['bot_message_text']) ? (string) $settings['bot_message_text'] : '',
+                        'input_bg_color' => isset($settings['input_bg_color']) ? (string) $settings['input_bg_color'] : '',
+                        'input_text_color' => isset($settings['input_text_color']) ? (string) $settings['input_text_color'] : '',
+                        'input_border_color' => isset($settings['input_border_color']) ? (string) $settings['input_border_color'] : '',
+                        'button_bg_color' => isset($settings['button_bg_color']) ? (string) $settings['button_bg_color'] : '',
+                        'button_text_color' => isset($settings['button_text_color']) ? (string) $settings['button_text_color'] : '',
+                        'button_radius' => $button_radius,
                     );
 
                     $output = octopus_ai_render_embedded_chatbot_markup($config);

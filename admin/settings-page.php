@@ -37,7 +37,7 @@ add_action('admin_enqueue_scripts', function($hook) {
         wp_enqueue_script('octopus-ai-admin-media', plugin_dir_url(__FILE__) . '../assets/js/admin-media-uploader.js', array('jquery'), '1.0', true);
 
         wp_localize_script('octopus-ai-admin-settings', 'octopusAiAdminSettingsVars', array(
-            'queryParamsToClear' => array('upload', 'delete', 'bulk_delete', 'chunks_deleted', 'chunks_cleared', 'sitemap_debug', 'pages', 'found', 'queued', 'sitemap_saved', 'sitemap_error', 'pdf_queued', 'pdf_error', 'config_imported', 'config_updated', 'config_import_error'),
+            'queryParamsToClear' => array('upload', 'delete', 'bulk_delete', 'chunks_deleted', 'chunks_cleared', 'sitemap_debug', 'pages', 'found', 'queued', 'sitemap_saved', 'sitemap_error', 'pdf_queued', 'pdf_error', 'config_imported', 'config_updated', 'config_import_error', 'cleanup_purged', 'cleanup_options', 'cleanup_dirs', 'cleanup_tables', 'cleanup_error'),
         ));
     }
 });
@@ -290,6 +290,36 @@ function octopus_ai_handle_config_import() {
     octopus_ai_settings_admin_redirect(array(
         'config_imported' => 1,
         'config_updated' => $updated,
+    ));
+}
+
+add_action('admin_post_octopus_ai_purge_data', 'octopus_ai_handle_purge_data');
+function octopus_ai_handle_purge_data() {
+    if (
+        !current_user_can('manage_options') ||
+        !isset($_POST['octopus_ai_purge_nonce']) ||
+        !wp_verify_nonce($_POST['octopus_ai_purge_nonce'], 'octopus_ai_purge_data')
+    ) {
+        wp_die('Beveiligingsfout bij opschonen van plugindata.');
+    }
+
+    if (!function_exists('octopus_ai_cleanup_plugin_data')) {
+        octopus_ai_settings_admin_redirect(array(
+            'cleanup_error' => 'Cleanup module niet beschikbaar in deze plugininstallatie.',
+        ));
+    }
+
+    $summary = octopus_ai_cleanup_plugin_data(array(
+        'drop_log_table' => true,
+        'delete_upload_dirs' => true,
+        'network_wide' => false,
+    ));
+
+    octopus_ai_settings_admin_redirect(array(
+        'cleanup_purged' => 1,
+        'cleanup_options' => isset($summary['options_deleted']) ? (int) $summary['options_deleted'] : 0,
+        'cleanup_dirs' => isset($summary['upload_dirs_deleted']) ? (int) $summary['upload_dirs_deleted'] : 0,
+        'cleanup_tables' => isset($summary['log_tables_dropped']) ? (int) $summary['log_tables_dropped'] : 0,
     ));
 }
 
@@ -549,6 +579,7 @@ function octopus_ai_process_pdf_queue() {
         $processed_files_now = 0;
         $processed_chunks_now = 0;
         $failed_now = 0;
+        $last_error_now = '';
 
         foreach ($batch as $file_path) {
             $file_path = (string) $file_path;
@@ -570,6 +601,13 @@ function octopus_ai_process_pdf_queue() {
                 $chunks = $chunker->chunkPdfWithMetadata($file_path, $slug, $file_url);
                 if (!is_array($chunks)) {
                     $chunks = array();
+                }
+
+                if (empty($chunks)) {
+                    $failed_now++;
+                    $last_error_now = 'Geen chunks gemaakt voor PDF: ' . $filename;
+                    error_log('[Octopus AI] Geen chunks gemaakt voor PDF: ' . $filename);
+                    continue;
                 }
 
                 foreach (glob($chunks_dir . $slug . '_chunk_*.json') as $old_file) {
@@ -599,6 +637,8 @@ function octopus_ai_process_pdf_queue() {
                 $processed_chunks_now += $chunk_index;
             } catch (Throwable $e) {
                 $failed_now++;
+                $last_error_now = 'PDF verwerking mislukt voor ' . $filename . ': ' . $e->getMessage();
+                error_log('[Octopus AI] ' . $last_error_now);
             }
         }
 
@@ -613,6 +653,11 @@ function octopus_ai_process_pdf_queue() {
         $status['remaining'] = count($remaining);
         $status['queued_total'] = max((int) ($status['queued_total'] ?? 0), (int) $status['processed_files'] + (int) $status['remaining']);
         $status['last_run'] = current_time('mysql');
+        if ($last_error_now !== '') {
+            $status['last_error'] = $last_error_now;
+        } elseif ($processed_files_now > 0) {
+            $status['last_error'] = '';
+        }
         update_option('octopus_ai_pdf_queue_status', $status, false);
 
         if (!empty($remaining) && !wp_next_scheduled('octopus_ai_process_pdf_queue')) {
@@ -623,8 +668,212 @@ function octopus_ai_process_pdf_queue() {
     }
 }
 
+function octopus_ai_get_remote_pdf_max_bytes() {
+    $mb = defined('MB_IN_BYTES') ? (int) MB_IN_BYTES : (1024 * 1024);
+    $default_max = 12 * $mb;
+
+    if (function_exists('octopus_ai_get_safe_pdf_max_bytes')) {
+        $safe_max = (int) octopus_ai_get_safe_pdf_max_bytes();
+        if ($safe_max > 0) {
+            $default_max = max(2 * $mb, $safe_max);
+        }
+    }
+
+    $max_bytes = (int) apply_filters('octopus_ai_remote_pdf_max_bytes', $default_max);
+    return max(2 * $mb, $max_bytes);
+}
+
+function octopus_ai_is_private_or_reserved_ip($ip) {
+    $ip = trim((string) $ip);
+    if ($ip === '' || !filter_var($ip, FILTER_VALIDATE_IP)) {
+        return true;
+    }
+
+    $public_ip = filter_var(
+        $ip,
+        FILTER_VALIDATE_IP,
+        FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE
+    );
+
+    return $public_ip === false;
+}
+
+function octopus_ai_host_resolves_private_ip($host) {
+    $host = strtolower(trim((string) $host));
+    if ($host === '' || $host === 'localhost') {
+        return true;
+    }
+
+    if (filter_var($host, FILTER_VALIDATE_IP)) {
+        return octopus_ai_is_private_or_reserved_ip($host);
+    }
+
+    $ips = array();
+    if (function_exists('dns_get_record') && defined('DNS_A') && defined('DNS_AAAA')) {
+        $records = @dns_get_record($host, DNS_A + DNS_AAAA);
+        if (is_array($records)) {
+            foreach ($records as $record) {
+                if (!empty($record['ip'])) {
+                    $ips[] = (string) $record['ip'];
+                }
+                if (!empty($record['ipv6'])) {
+                    $ips[] = (string) $record['ipv6'];
+                }
+            }
+        }
+    }
+
+    if (empty($ips)) {
+        $ipv4 = @gethostbyname($host);
+        if (is_string($ipv4) && $ipv4 !== '' && $ipv4 !== $host) {
+            $ips[] = $ipv4;
+        }
+    }
+
+    if (empty($ips)) {
+        return false;
+    }
+
+    foreach (array_unique($ips) as $ip) {
+        if (octopus_ai_is_private_or_reserved_ip($ip)) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+function octopus_ai_validate_remote_pdf_url($url) {
+    $url = trim((string) $url);
+    if ($url === '') {
+        return new WP_Error('octopus_ai_pdf_url_missing', 'Geef een geldige PDF-URL op.');
+    }
+
+    $sanitized = esc_url_raw($url, array('http', 'https'));
+    if ($sanitized === '') {
+        return new WP_Error('octopus_ai_pdf_url_invalid', 'De opgegeven PDF-URL is ongeldig.');
+    }
+
+    $scheme = strtolower((string) wp_parse_url($sanitized, PHP_URL_SCHEME));
+    if (!in_array($scheme, array('http', 'https'), true)) {
+        return new WP_Error('octopus_ai_pdf_url_scheme', 'Alleen http(s)-URL\'s zijn toegestaan.');
+    }
+
+    if (function_exists('wp_http_validate_url') && !wp_http_validate_url($sanitized)) {
+        return new WP_Error('octopus_ai_pdf_url_invalid', 'De opgegeven PDF-URL is ongeldig.');
+    }
+
+    $host = (string) wp_parse_url($sanitized, PHP_URL_HOST);
+    if ($host === '') {
+        return new WP_Error('octopus_ai_pdf_url_host', 'De PDF-URL bevat geen geldige hostnaam.');
+    }
+
+    if (octopus_ai_host_resolves_private_ip($host)) {
+        return new WP_Error('octopus_ai_pdf_url_private', 'Interne of lokale hostnamen zijn niet toegestaan.');
+    }
+
+    return $sanitized;
+}
+
+function octopus_ai_download_remote_pdf_to_uploads($url) {
+    $validated_url = octopus_ai_validate_remote_pdf_url($url);
+    if (is_wp_error($validated_url)) {
+        return $validated_url;
+    }
+
+    $upload_dir = wp_upload_dir();
+    $upload_path = trailingslashit($upload_dir['basedir']) . 'octopus-chatbot/';
+    if (!file_exists($upload_path) && !wp_mkdir_p($upload_path)) {
+        return new WP_Error('octopus_ai_pdf_storage_failed', 'Uploadmap kon niet worden aangemaakt.');
+    }
+
+    $max_bytes = octopus_ai_get_remote_pdf_max_bytes();
+    $temp_file = wp_tempnam('octopus-ai-remote-pdf');
+    if (!is_string($temp_file) || $temp_file === '') {
+        return new WP_Error('octopus_ai_pdf_temp_failed', 'Tijdelijk bestand kon niet worden aangemaakt.');
+    }
+
+    $response = wp_safe_remote_get($validated_url, array(
+        'timeout' => 30,
+        'redirection' => 5,
+        'stream' => true,
+        'filename' => $temp_file,
+        'limit_response_size' => $max_bytes + 1024,
+    ));
+
+    if (is_wp_error($response)) {
+        @unlink($temp_file);
+        return new WP_Error('octopus_ai_pdf_fetch_failed', 'PDF kon niet worden opgehaald: ' . $response->get_error_message());
+    }
+
+    $status_code = (int) wp_remote_retrieve_response_code($response);
+    if ($status_code < 200 || $status_code >= 300) {
+        @unlink($temp_file);
+        return new WP_Error('octopus_ai_pdf_fetch_http', 'PDF kon niet worden opgehaald (HTTP ' . $status_code . ').');
+    }
+
+    $content_length = (int) wp_remote_retrieve_header($response, 'content-length');
+    if ($content_length > 0 && $content_length > $max_bytes) {
+        @unlink($temp_file);
+        $max_human = function_exists('size_format') ? size_format($max_bytes, 2) : ($max_bytes . ' bytes');
+        return new WP_Error('octopus_ai_pdf_too_large', 'PDF is groter dan toegelaten limiet (' . $max_human . ').');
+    }
+
+    $downloaded_size = (int) @filesize($temp_file);
+    if ($downloaded_size <= 0) {
+        @unlink($temp_file);
+        return new WP_Error('octopus_ai_pdf_empty', 'Leeg PDF-bestand ontvangen.');
+    }
+
+    if ($downloaded_size > $max_bytes) {
+        @unlink($temp_file);
+        $max_human = function_exists('size_format') ? size_format($max_bytes, 2) : ($max_bytes . ' bytes');
+        return new WP_Error('octopus_ai_pdf_too_large', 'PDF is groter dan toegelaten limiet (' . $max_human . ').');
+    }
+
+    $sample = '';
+    $handle = @fopen($temp_file, 'rb');
+    if (is_resource($handle)) {
+        $sample = (string) fread($handle, 1024);
+        fclose($handle);
+    }
+
+    if ($sample === '' || strpos($sample, '%PDF') === false) {
+        @unlink($temp_file);
+        return new WP_Error('octopus_ai_pdf_not_pdf', 'De URL levert geen geldig PDF-bestand op.');
+    }
+
+    $remote_path = (string) wp_parse_url($validated_url, PHP_URL_PATH);
+    $decoded_basename = rawurldecode((string) basename($remote_path));
+    $filename = sanitize_file_name($decoded_basename);
+    if ($filename === '' || !preg_match('/\.pdf$/i', $filename)) {
+        $filename = 'remote-' . substr(md5($validated_url), 0, 12) . '.pdf';
+    }
+
+    $unique_filename = wp_unique_filename($upload_path, $filename);
+    $destination = $upload_path . $unique_filename;
+
+    $moved = @rename($temp_file, $destination);
+    if (!$moved) {
+        $moved = @copy($temp_file, $destination);
+        @unlink($temp_file);
+    }
+
+    if (!$moved || !file_exists($destination)) {
+        @unlink($temp_file);
+        return new WP_Error('octopus_ai_pdf_store_failed', 'PDF kon niet lokaal opgeslagen worden.');
+    }
+
+    return array(
+        'path' => wp_normalize_path($destination),
+        'filename' => $unique_filename,
+        'size' => (int) @filesize($destination),
+    );
+}
+
 // --- PDF UPLOAD + CHUNKING ---
 add_action('admin_post_octopus_ai_pdf_upload', 'octopus_ai_handle_pdf_upload');
+add_action('admin_post_octopus_ai_pdf_import_url', 'octopus_ai_handle_pdf_import_url');
 function octopus_ai_handle_pdf_upload() {
     if (
         !current_user_can('manage_options') ||
@@ -643,6 +892,7 @@ function octopus_ai_handle_pdf_upload() {
 
     $files = $_FILES['octopus_ai_pdf_upload'];
     $queued_files = array();
+    $validation_errors = array();
 
     foreach ($files['name'] as $index => $name) {
         if ($files['error'][$index] === UPLOAD_ERR_OK) {
@@ -650,19 +900,72 @@ function octopus_ai_handle_pdf_upload() {
             $filepath = $upload_path . $filename;
 
             if (move_uploaded_file($files['tmp_name'][$index], $filepath)) {
+                if (function_exists('octopus_ai_validate_pdf_for_smalot')) {
+                    $validation = octopus_ai_validate_pdf_for_smalot($filepath);
+                    if (is_wp_error($validation)) {
+                        $validation_errors[] = $filename . ': ' . $validation->get_error_message();
+                        @unlink($filepath);
+                        continue;
+                    }
+                }
                 $queued_files[] = wp_normalize_path($filepath);
             }
         }
     }
 
     if (empty($queued_files)) {
+        $error_message = 'Geen PDF-bestanden geupload of bestand kon niet opgeslagen worden.';
+        if (!empty($validation_errors)) {
+            $error_message = implode(' | ', array_slice($validation_errors, 0, 2));
+        }
         octopus_ai_settings_admin_redirect(array(
-            'pdf_error' => 'Geen PDF-bestanden geupload of bestand kon niet opgeslagen worden.',
+            'pdf_error' => $error_message,
         ));
     }
 
     $queued_total = octopus_ai_enqueue_pdf_jobs($queued_files);
 
+    octopus_ai_settings_admin_redirect(array(
+        'upload' => 'success',
+        'pdf_queued' => $queued_total,
+    ));
+}
+
+function octopus_ai_handle_pdf_import_url() {
+    if (
+        !current_user_can('manage_options') ||
+        !isset($_POST['octopus_ai_pdf_url_nonce']) ||
+        !wp_verify_nonce($_POST['octopus_ai_pdf_url_nonce'], 'octopus_ai_import_pdf_url')
+    ) {
+        wp_die('Beveiligingsfout bij PDF-import.');
+    }
+
+    $input_url = isset($_POST['octopus_ai_pdf_url']) ? (string) wp_unslash($_POST['octopus_ai_pdf_url']) : '';
+    $download = octopus_ai_download_remote_pdf_to_uploads($input_url);
+    if (is_wp_error($download)) {
+        octopus_ai_settings_admin_redirect(array(
+            'pdf_error' => $download->get_error_message(),
+        ));
+    }
+
+    $pdf_path = isset($download['path']) ? (string) $download['path'] : '';
+    if ($pdf_path === '' || !file_exists($pdf_path)) {
+        octopus_ai_settings_admin_redirect(array(
+            'pdf_error' => 'PDF kon niet lokaal opgeslagen worden.',
+        ));
+    }
+
+    if (function_exists('octopus_ai_validate_pdf_for_smalot')) {
+        $validation = octopus_ai_validate_pdf_for_smalot($pdf_path);
+        if (is_wp_error($validation)) {
+            @unlink($pdf_path);
+            octopus_ai_settings_admin_redirect(array(
+                'pdf_error' => $validation->get_error_message(),
+            ));
+        }
+    }
+
+    $queued_total = octopus_ai_enqueue_pdf_jobs(array($pdf_path));
     octopus_ai_settings_admin_redirect(array(
         'upload' => 'success',
         'pdf_queued' => $queued_total,
@@ -944,6 +1247,12 @@ function octopus_ai_settings_page() {
             </div>
         <?php endif; ?>
 
+        <?php if (!empty($pdf_queue_status) && !empty($pdf_queue_status['last_error'])) : ?>
+            <div class="notice notice-warning is-dismissible">
+                <p>Laatste PDF-fout: <?php echo esc_html((string) $pdf_queue_status['last_error']); ?></p>
+            </div>
+        <?php endif; ?>
+
         <?php if (isset($_GET['pdf_error']) && $_GET['pdf_error'] !== '') : ?>
             <div class="notice notice-error is-dismissible"><p><?php echo esc_html(sanitize_text_field((string) wp_unslash($_GET['pdf_error']))); ?></p></div>
         <?php endif; ?>
@@ -954,6 +1263,16 @@ function octopus_ai_settings_page() {
 
         <?php if (isset($_GET['config_import_error']) && $_GET['config_import_error'] !== '') : ?>
             <div class="notice notice-error is-dismissible"><p><?php echo esc_html(sanitize_text_field((string) wp_unslash($_GET['config_import_error']))); ?></p></div>
+        <?php endif; ?>
+
+        <?php if (isset($_GET['cleanup_purged']) && intval($_GET['cleanup_purged']) === 1) : ?>
+            <div class="notice notice-success is-dismissible">
+                <p>Plugindata opgeschoond. Verwijderde opties: <?php echo intval($_GET['cleanup_options'] ?? 0); ?>, verwijderde upload-mappen: <?php echo intval($_GET['cleanup_dirs'] ?? 0); ?>, verwijderde logtabellen: <?php echo intval($_GET['cleanup_tables'] ?? 0); ?>.</p>
+            </div>
+        <?php endif; ?>
+
+        <?php if (isset($_GET['cleanup_error']) && $_GET['cleanup_error'] !== '') : ?>
+            <div class="notice notice-error is-dismissible"><p><?php echo esc_html(sanitize_text_field((string) wp_unslash($_GET['cleanup_error']))); ?></p></div>
         <?php endif; ?>
 
         <?php if (isset($_GET['delete']) && sanitize_key((string) wp_unslash($_GET['delete'])) === 'success') : ?>
@@ -1335,6 +1654,22 @@ function octopus_ai_settings_page() {
             </form>
         </div>
 
+        <div class="upload-box octopus-cleanup-box">
+            <h3>Opschonen bij verwijderen</h3>
+            <p class="section-description">Als de host pluginmappen niet laat verwijderen, kan je hier alle plugin-data veilig opschonen (opties, logtabel, chunks, sitemap-cache).</p>
+            <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
+                <?php wp_nonce_field('octopus_ai_purge_data', 'octopus_ai_purge_nonce'); ?>
+                <input type="hidden" name="action" value="octopus_ai_purge_data">
+                <input
+                    type="submit"
+                    class="button button-secondary"
+                    value="Wis plugin-data nu"
+                    onclick="return confirm('Dit verwijdert plugin-opties, logs en chunks. Zeker doorgaan?');"
+                >
+            </form>
+            <p class="description" style="margin-top:8px;">Daarna kan je de plugin deactiveren/verwijderen zodra bestandsrechten dat toelaten.</p>
+        </div>
+
         <?php
         $sitemap_dir = trailingslashit($upload_dir['basedir']) . 'octopus-chatbot/';
         $sitemap_url_base = trailingslashit($upload_dir['baseurl']) . 'octopus-chatbot/';
@@ -1354,6 +1689,20 @@ function octopus_ai_settings_page() {
                         <input type="hidden" name="action" value="octopus_ai_pdf_upload">
                         <input type="file" name="octopus_ai_pdf_upload[]" accept="application/pdf" multiple required>
                         <?php submit_button('Upload PDF'); ?>
+                    </form>
+                    <hr style="margin:16px 0;">
+                    <p class="section-description">Of haal een PDF rechtstreeks op via URL (handig wanneer uploadlimieten te streng zijn).</p>
+                    <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
+                        <?php wp_nonce_field('octopus_ai_import_pdf_url', 'octopus_ai_pdf_url_nonce'); ?>
+                        <input type="hidden" name="action" value="octopus_ai_pdf_import_url">
+                        <input
+                            type="url"
+                            name="octopus_ai_pdf_url"
+                            style="width:500px;"
+                            placeholder="https://example.com/handleiding.pdf"
+                            required
+                        >
+                        <?php submit_button('Haal PDF op via URL', 'secondary', '', false); ?>
                     </form>
                 </div>
 

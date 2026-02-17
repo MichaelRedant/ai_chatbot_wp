@@ -1,6 +1,21 @@
 :root {
     --primary-color: #0f6c95;
     --header-text-color: #ffffff;
+    --octopus-chat-font-family: "Segoe UI", "Helvetica Neue", sans-serif;
+    --octopus-header-font-size: 16px;
+    --octopus-header-font-weight: 600;
+    --octopus-body-font-size: 14px;
+    --octopus-message-radius: 12px;
+    --octopus-user-message-bg: #eaf6fb;
+    --octopus-user-message-text: var(--primary-color);
+    --octopus-bot-message-bg: #e2e2e2;
+    --octopus-bot-message-text: #333333;
+    --octopus-input-bg: #ffffff;
+    --octopus-input-text: #1f2528;
+    --octopus-input-border: #cccccc;
+    --octopus-button-bg: var(--primary-color);
+    --octopus-button-text: #ffffff;
+    --octopus-button-radius: 20px;
     --chat-ease: cubic-bezier(0.22, 1, 0.36, 1);
     --chat-fast: 180ms;
     --chat-medium: 280ms;
@@ -113,7 +128,7 @@
     border-radius: 16px;
     box-shadow: 0 8px 24px rgba(0,0,0,0.2);
     flex-direction: column;
-    font-family: "Segoe UI", "Helvetica Neue", sans-serif;
+    font-family: var(--octopus-chat-font-family);
     overflow: hidden;
     z-index: 9999;
     opacity: 0;
@@ -196,8 +211,8 @@
     background-image: linear-gradient(135deg, rgba(255, 255, 255, 0.16), rgba(255, 255, 255, 0));
     color: var(--header-text-color);
     padding: 10px;
-    font-size: 16px;
-    font-weight: 600;
+    font-size: var(--octopus-header-font-size);
+    font-weight: var(--octopus-header-font-weight);
     border-top-left-radius: 12px;
     border-top-right-radius: 12px;
     display: flex;
@@ -228,8 +243,8 @@
     flex-grow: 1;
     text-align: center;
     color: var(--header-text-color);
-    font-weight: 600;
-    font-size: 16px;
+    font-weight: var(--octopus-header-font-weight);
+    font-size: var(--octopus-header-font-size);
     letter-spacing: 0.01em;
 }
 
@@ -405,7 +420,7 @@
 
 .topic-quickpick-btn {
     border: 1px solid rgba(15, 108, 149, 0.3);
-    border-radius: 999px;
+    border-radius: var(--octopus-button-radius);
     background: #ffffff;
     color: #0b5f86;
     padding: 6px 10px;
@@ -419,6 +434,48 @@
     transform: translateY(-1px);
     border-color: rgba(11, 95, 134, 0.5);
     background: #f1f8fc;
+}
+
+.topic-switch-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 8px;
+}
+
+.topic-switch-btn {
+    border: 1px solid rgba(15, 108, 149, 0.3);
+    background: #ffffff;
+    color: #0b5f86;
+    border-radius: var(--octopus-button-radius);
+    padding: 6px 12px;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: transform var(--chat-fast) ease, filter var(--chat-fast) ease, opacity var(--chat-fast) ease;
+}
+
+.topic-switch-btn:hover {
+    transform: translateY(-1px);
+    filter: brightness(0.97);
+}
+
+.topic-switch-btn.is-primary {
+    background: var(--octopus-button-bg);
+    color: var(--octopus-button-text);
+    border-color: transparent;
+}
+
+.topic-switch-btn.is-disabled,
+.topic-switch-btn:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+    transform: none;
+}
+
+.topic-switch-note {
+    font-size: 12px;
+    color: #2f3e47;
 }
 
 .chat-topic-badge {
@@ -499,7 +556,7 @@
     gap: 6px;
     padding: 10px;
     overflow-y: auto;
-    font-size: 14px;
+    font-size: var(--octopus-body-font-size);
     color: #333;
     background: rgba(255, 255, 255, 0.65);
     backdrop-filter: blur(10px);
@@ -510,11 +567,11 @@
 .user-message {
     margin: 5px 0;
     text-align: right;
-    color: var(--primary-color);
-    background: #eaf6fb;
+    color: var(--octopus-user-message-text);
+    background: var(--octopus-user-message-bg);
     display: inline-block;
     padding: 6px 10px;
-    border-radius: 12px;
+    border-radius: var(--octopus-message-radius);
     max-width: 82%;
     margin-left: auto;
     align-self: flex-end;
@@ -525,11 +582,11 @@
 .bot-message {
     margin: 5px 0;
     text-align: left;
-    color: #333;
-    background: #e2e2e2;
+    color: var(--octopus-bot-message-text);
+    background: var(--octopus-bot-message-bg);
     display: inline-block;
     padding: 6px 10px;
-    border-radius: 12px;
+    border-radius: var(--octopus-message-radius);
     max-width: 82%;
     margin-right: auto;
     align-self: flex-start;
@@ -636,11 +693,12 @@
 #chat-input {
     flex: 1;
     padding: 10px 14px;
-    border: 1px solid #ccc;
+    border: 1px solid var(--octopus-input-border);
     border-radius: 20px;
-    font-size: 14px;
+    font-size: var(--octopus-body-font-size);
     outline: none;
-    background: #fff;
+    background: var(--octopus-input-bg);
+    color: var(--octopus-input-text);
     transition: border var(--chat-fast) ease, box-shadow var(--chat-fast) ease, opacity var(--chat-fast) ease;
 }
 
@@ -654,12 +712,12 @@
 }
 
 #chat-send {
-    background: var(--primary-color);
+    background: var(--octopus-button-bg);
     border: none;
-    color: white;
+    color: var(--octopus-button-text);
     padding: 10px 16px;
-    border-radius: 20px;
-    font-size: 14px;
+    border-radius: var(--octopus-button-radius);
+    font-size: var(--octopus-body-font-size);
     font-weight: bold;
     cursor: pointer;
     transition: background var(--chat-fast) ease, transform var(--chat-fast) ease, opacity var(--chat-fast) ease;
@@ -668,7 +726,8 @@
 }
 
 #chat-send:hover {
-    background: #0d5a7f;
+    background: var(--octopus-button-bg);
+    filter: brightness(0.92);
     transform: translateY(-1px);
 }
 
@@ -784,6 +843,7 @@
 .chat-topic-badge:focus-visible,
 .topic-option:focus-visible,
 .topic-quickpick-btn:focus-visible,
+.topic-switch-btn:focus-visible,
 .octopus-feedback-btn:focus-visible {
     outline: 2px solid rgba(11, 95, 134, 0.45);
     outline-offset: 2px;
@@ -967,7 +1027,7 @@
     }
 
     #chat-header .chat-header-title {
-        font-size: 15px;
+        font-size: var(--octopus-header-font-size);
         text-align: center;
         flex-grow: 1;
     }
@@ -994,7 +1054,7 @@
     .user-message,
     .bot-message {
         max-width: 90%;
-        font-size: 13px;
+        font-size: var(--octopus-body-font-size);
     }
 
     #chat-input-container {
@@ -1004,12 +1064,12 @@
     }
 
     #chat-input {
-        font-size: 13px;
+        font-size: var(--octopus-body-font-size);
         padding: 8px 12px;
     }
 
     #chat-send {
-        font-size: 13px;
+        font-size: var(--octopus-body-font-size);
         padding: 8px 14px;
     }
 
