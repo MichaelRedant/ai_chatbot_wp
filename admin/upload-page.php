@@ -173,6 +173,19 @@ add_action('admin_menu', function() {
 });
 
 function octopus_ai_pdf_upload_page() {
+    if (isset($_GET['upload']) && sanitize_key((string) wp_unslash($_GET['upload'])) === 'success') {
+        if (isset($_GET['pdf_queued']) && intval($_GET['pdf_queued']) > 0) {
+            echo '<div class="updated notice is-dismissible"><p>PDF succesvol toegevoegd. Wachtrij voor achtergrondverwerking: ' . intval($_GET['pdf_queued']) . ' bestand(en).</p></div>';
+        } else {
+            echo '<div class="updated notice is-dismissible"><p>PDF succesvol toegevoegd.</p></div>';
+        }
+    }
+
+    if (isset($_GET['pdf_error']) && (string) $_GET['pdf_error'] !== '') {
+        $error_message = sanitize_text_field((string) wp_unslash($_GET['pdf_error']));
+        echo '<div class="error notice is-dismissible"><p>' . esc_html($error_message) . '</p></div>';
+    }
+
     if (isset($_POST['octopus_pdf_upload_nonce']) && wp_verify_nonce($_POST['octopus_pdf_upload_nonce'], 'octopus_pdf_upload')) {
         if (!empty($_FILES['octopus_pdf_file']['name'])) {
             $uploaded = wp_handle_upload($_FILES['octopus_pdf_file'], array(
@@ -249,6 +262,24 @@ function octopus_ai_pdf_upload_page() {
             <p><label for="octopus_pdf_file">Upload een kennisbestand (PDF, TXT, MD of CSV met vraag/antwoord):</label></p>
             <input type="file" id="octopus_pdf_file" name="octopus_pdf_file" accept=".pdf,.txt,.md,.markdown,.csv,text/plain,text/csv,application/pdf" required>
             <p><input type="submit" class="button button-primary" value="Upload en Verwerk Kennisbron"></p>
+        </form>
+        <hr>
+        <h2>PDF ophalen via URL</h2>
+        <p>Voeg een online PDF toe zonder browser-uploadlimiet. De PDF wordt in de achtergrondwachtrij geplaatst.</p>
+        <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
+            <?php wp_nonce_field('octopus_ai_import_pdf_url', 'octopus_ai_pdf_url_nonce'); ?>
+            <input type="hidden" name="action" value="octopus_ai_pdf_import_url">
+            <input type="hidden" name="octopus_ai_return_page" value="octopus_ai_pdf_beheer">
+            <p>
+                <input
+                    type="url"
+                    name="octopus_ai_pdf_url"
+                    style="min-width:420px;max-width:100%;"
+                    placeholder="https://example.com/handleiding.pdf"
+                    required
+                >
+            </p>
+            <p><input type="submit" class="button button-secondary" value="Haal PDF op via URL"></p>
         </form>
     </div>
     <?php

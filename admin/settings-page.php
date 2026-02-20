@@ -173,6 +173,26 @@ function octopus_ai_settings_admin_redirect(array $params = array()) {
     exit;
 }
 
+function octopus_ai_pdf_admin_redirect(array $params = array()) {
+    $requested_page = '';
+    if (isset($_REQUEST['octopus_ai_return_page'])) {
+        $requested_page = sanitize_key((string) wp_unslash($_REQUEST['octopus_ai_return_page']));
+    }
+
+    $allowed_pages = array(
+        'octopus-ai-chatbot',
+        'octopus_ai_pdf_beheer',
+    );
+
+    if (!in_array($requested_page, $allowed_pages, true)) {
+        $requested_page = 'octopus-ai-chatbot';
+    }
+
+    $base = admin_url('admin.php?page=' . rawurlencode($requested_page));
+    wp_safe_redirect(add_query_arg($params, $base));
+    exit;
+}
+
 function octopus_ai_get_exportable_option_names() {
     return array(
         'octopus_ai_model',
@@ -670,12 +690,15 @@ function octopus_ai_process_pdf_queue() {
 
 function octopus_ai_get_remote_pdf_max_bytes() {
     $mb = defined('MB_IN_BYTES') ? (int) MB_IN_BYTES : (1024 * 1024);
-    $default_max = 12 * $mb;
+    // Remote import dient uploadlimieten te omzeilen; hou een ruimere default aan.
+    $default_max = 100 * $mb;
 
     if (function_exists('octopus_ai_get_safe_pdf_max_bytes')) {
         $safe_max = (int) octopus_ai_get_safe_pdf_max_bytes();
         if ($safe_max > 0) {
-            $default_max = max(2 * $mb, $safe_max);
+            // Safe Smalot limiet kan laag zijn op kleine servers (bv. 4MB).
+            // Voor remote import mag de limiet niet onnodig dalen, omdat fallback parsing mogelijk is.
+            $default_max = max($default_max, $safe_max);
         }
     }
 
@@ -892,7 +915,6 @@ function octopus_ai_handle_pdf_upload() {
 
     $files = $_FILES['octopus_ai_pdf_upload'];
     $queued_files = array();
-    $validation_errors = array();
 
     foreach ($files['name'] as $index => $name) {
         if ($files['error'][$index] === UPLOAD_ERR_OK) {
@@ -900,14 +922,6 @@ function octopus_ai_handle_pdf_upload() {
             $filepath = $upload_path . $filename;
 
             if (move_uploaded_file($files['tmp_name'][$index], $filepath)) {
-                if (function_exists('octopus_ai_validate_pdf_for_smalot')) {
-                    $validation = octopus_ai_validate_pdf_for_smalot($filepath);
-                    if (is_wp_error($validation)) {
-                        $validation_errors[] = $filename . ': ' . $validation->get_error_message();
-                        @unlink($filepath);
-                        continue;
-                    }
-                }
                 $queued_files[] = wp_normalize_path($filepath);
             }
         }
@@ -915,9 +929,6 @@ function octopus_ai_handle_pdf_upload() {
 
     if (empty($queued_files)) {
         $error_message = 'Geen PDF-bestanden geupload of bestand kon niet opgeslagen worden.';
-        if (!empty($validation_errors)) {
-            $error_message = implode(' | ', array_slice($validation_errors, 0, 2));
-        }
         octopus_ai_settings_admin_redirect(array(
             'pdf_error' => $error_message,
         ));
@@ -943,30 +954,20 @@ function octopus_ai_handle_pdf_import_url() {
     $input_url = isset($_POST['octopus_ai_pdf_url']) ? (string) wp_unslash($_POST['octopus_ai_pdf_url']) : '';
     $download = octopus_ai_download_remote_pdf_to_uploads($input_url);
     if (is_wp_error($download)) {
-        octopus_ai_settings_admin_redirect(array(
+        octopus_ai_pdf_admin_redirect(array(
             'pdf_error' => $download->get_error_message(),
         ));
     }
 
     $pdf_path = isset($download['path']) ? (string) $download['path'] : '';
     if ($pdf_path === '' || !file_exists($pdf_path)) {
-        octopus_ai_settings_admin_redirect(array(
+        octopus_ai_pdf_admin_redirect(array(
             'pdf_error' => 'PDF kon niet lokaal opgeslagen worden.',
         ));
     }
 
-    if (function_exists('octopus_ai_validate_pdf_for_smalot')) {
-        $validation = octopus_ai_validate_pdf_for_smalot($pdf_path);
-        if (is_wp_error($validation)) {
-            @unlink($pdf_path);
-            octopus_ai_settings_admin_redirect(array(
-                'pdf_error' => $validation->get_error_message(),
-            ));
-        }
-    }
-
     $queued_total = octopus_ai_enqueue_pdf_jobs(array($pdf_path));
-    octopus_ai_settings_admin_redirect(array(
+    octopus_ai_pdf_admin_redirect(array(
         'upload' => 'success',
         'pdf_queued' => $queued_total,
     ));

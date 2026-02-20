@@ -92,6 +92,37 @@ document.addEventListener('DOMContentLoaded', function () {
     return output;
   }
 
+  function normalizeOrderedListNumbering(text) {
+    const lines = String(text || '').split('\n');
+    let orderedIndex = 0;
+    let inOrderedBlock = false;
+
+    for (let i = 0; i < lines.length; i++) {
+      const sourceLine = String(lines[i] || '');
+      const trimmed = sourceLine.trim();
+
+      if (trimmed === '') {
+        continue;
+      }
+
+      const orderedMatch = trimmed.match(/^(\d+)\s*(?:\\?[.)])\s+(.+)$/);
+      if (orderedMatch) {
+        orderedIndex = inOrderedBlock ? orderedIndex + 1 : 1;
+        inOrderedBlock = true;
+
+        const leadingWhitespaceMatch = sourceLine.match(/^\s*/);
+        const leadingWhitespace = leadingWhitespaceMatch ? leadingWhitespaceMatch[0] : '';
+        lines[i] = leadingWhitespace + orderedIndex + '. ' + orderedMatch[2];
+        continue;
+      }
+
+      inOrderedBlock = false;
+      orderedIndex = 0;
+    }
+
+    return lines.join('\n');
+  }
+
   function parseBotPayload(raw) {
     const fallbackText = String(raw || '').trim();
     const payload = {
@@ -169,25 +200,42 @@ document.addEventListener('DOMContentLoaded', function () {
         continue;
       }
 
-      if (/^[-*]\s+/.test(raw)) {
+      const markdownHeading = raw.match(/^#{1,4}\s+(.+)$/);
+      if (markdownHeading) {
+        flushPara();
+        closeLists();
+        out += '<h4 class="octopus-msg-heading">' + String(markdownHeading[1] || '').trim() + '</h4>';
+        continue;
+      }
+
+      if (/^[^<]{3,60}:\s*$/.test(raw)) {
+        flushPara();
+        closeLists();
+        out += '<h5 class="octopus-msg-subheading">' + raw.replace(/:\s*$/, ':') + '</h5>';
+        continue;
+      }
+
+      const unorderedMatch = raw.match(/^(?:<(?:strong|b|em)>\s*)?[-*•]\s*(?:<\/(?:strong|b|em)>\s*)?(.+)$/i);
+      if (unorderedMatch) {
         flushPara();
         if (!inUl) {
           closeLists();
           out += '<ul>';
           inUl = true;
         }
-        out += '<li>' + raw.replace(/^[-*]\s+/, '') + '</li>';
+        out += '<li>' + String(unorderedMatch[1] || '').trim() + '</li>';
         continue;
       }
 
-      if (/^\d+[\.)]\s+/.test(raw)) {
+      const orderedMatch = raw.match(/^(?:<(?:strong|b|em)>\s*)?\d+\s*(?:\\?\.|\\?\))\s*(?:<\/(?:strong|b|em)>\s*)?(.+)$/i);
+      if (orderedMatch) {
         flushPara();
         if (!inOl) {
           closeLists();
           out += '<ol>';
           inOl = true;
         }
-        out += '<li>' + raw.replace(/^\d+[\.)]\s+/, '') + '</li>';
+        out += '<li>' + String(orderedMatch[1] || '').trim() + '</li>';
         continue;
       }
 
@@ -203,6 +251,7 @@ document.addEventListener('DOMContentLoaded', function () {
   function formatMessageToHtml(content, fallbackButtonLabel) {
     let text = stripWrappingQuotes(decodeUnicode(content));
     text = normalizeBreaks(text);
+    text = normalizeOrderedListNumbering(text);
 
     let html = escapeHtml(text);
     html = html
@@ -247,6 +296,7 @@ document.addEventListener('DOMContentLoaded', function () {
       this.isSending = false;
       this.sendCooldown = false;
       this.isEmbedded = this.mode === 'embedded';
+      this.isExpanded = false;
 
       this.topicChoices = [
         {
@@ -364,6 +414,7 @@ document.addEventListener('DOMContentLoaded', function () {
       this.topicStorageKey = 'octopus_chat_topic_' + base;
       this.welcomeSessionKey = 'octopus_chat_welcome_' + base;
       this.feedbackStorageKey = 'octopus_chat_feedback_' + base;
+      this.expandedStorageKey = 'octopus_chat_expanded_' + base;
     }
 
     buildDom() {
@@ -373,6 +424,11 @@ document.addEventListener('DOMContentLoaded', function () {
       this.headerTextColor = this.config.headerTextColor || this.settings.header_text_color || '#ffffff';
       this.headerTitle = this.config.title || this.settings.brand_name || 'AI Chatbot';
       this.fallbackButtonLabel = this.i18n.fallback_button || 'Bekijk dit in de handleiding';
+      this.aiDisclaimerText = (this.i18n.ai_disclaimer || (
+        this.lang === 'FR'
+          ? "Remarque: ce chatbot utilise l'IA. Les reponses sont generees automatiquement, a titre informatif, et peuvent etre inexactes ou incompletes. Ceci ne constitue pas un avis juridique, fiscal ou comptable. Verifie toujours dans la documentation officielle."
+          : 'Let op: deze chatbot gebruikt AI. Antwoorden worden automatisch gegenereerd, zijn enkel informatief en kunnen onjuist of onvolledig zijn. Dit is geen juridisch, fiscaal of boekhoudkundig advies. Verifieer altijd in de officiele handleiding.'
+      )).trim();
       this.fontFamily = sanitizeFontFamily(this.config.fontFamily || '');
       this.headerFontSize = parseIntInRange(this.config.headerFontSize, 12, 24, 16);
       this.headerFontWeight = ['400', '500', '600', '700', '800'].includes(String(this.config.headerFontWeight))
@@ -439,7 +495,12 @@ document.addEventListener('DOMContentLoaded', function () {
             <div class="chat-logo-glass"><img src="${this.settings.logo_url || ''}" alt="Logo" class="chat-logo"></div>
             <span class="chat-header-title">${escapeHtml(this.headerTitle)}</span>
           </div>
-          <button id="chat-close" type="button" aria-label="Sluiten" class="chat-close-button">&times;</button>
+          <div class="chat-header-actions">
+            <button id="chat-expand" type="button" aria-label="Vergroot chatvenster" class="chat-header-action chat-expand-button" aria-pressed="false">
+              <span class="chat-expand-icon" aria-hidden="true">⤢</span>
+            </button>
+            <button id="chat-close" type="button" aria-label="Sluiten" class="chat-header-action chat-close-button">&times;</button>
+          </div>
         </div>
         <div id="chat-messages" role="log" aria-live="polite" aria-relevant="additions text" aria-atomic="false"></div>
         <button id="chat-reset" type="button" class="chat-reset-button" title="${escapeHtml(this.i18n.reset_title || 'Reset')}">${escapeHtml(this.i18n.reset_button || 'Vernieuw')}</button>
@@ -447,6 +508,7 @@ document.addEventListener('DOMContentLoaded', function () {
           <input type="text" id="chat-input" placeholder="${escapeHtml(this.i18n.placeholder || 'Typ je vraag...')}" />
           <button id="chat-send" type="button">${escapeHtml(this.i18n.send || 'Verstuur')}</button>
         </div>
+        <div id="chat-ai-disclaimer">${escapeHtml(this.aiDisclaimerText)}</div>
       `;
       this.root.appendChild(this.chatbot);
 
@@ -454,11 +516,17 @@ document.addEventListener('DOMContentLoaded', function () {
       this.chatInput = this.chatbot.querySelector('#chat-input');
       this.chatSend = this.chatbot.querySelector('#chat-send');
       this.chatClose = this.chatbot.querySelector('#chat-close');
+      this.chatExpand = this.chatbot.querySelector('#chat-expand');
+      this.chatExpandIcon = this.chatbot.querySelector('.chat-expand-icon');
       this.chatReset = this.chatbot.querySelector('#chat-reset');
       this.chatInputContainer = this.chatbot.querySelector('#chat-input-container');
       this.headerInner = this.chatbot.querySelector('.chat-header-inner');
       this.chatMessages.setAttribute('aria-label', this.lang === 'FR' ? 'Historique de conversation' : 'Gespreksgeschiedenis');
       this.chatClose.setAttribute('aria-label', this.lang === 'FR' ? 'Fermer' : 'Sluiten');
+      if (this.chatExpand) {
+        this.chatExpand.setAttribute('aria-label', this.lang === 'FR' ? 'Agrandir le chat' : 'Chat vergroten');
+        this.chatExpand.setAttribute('title', this.lang === 'FR' ? 'Agrandir' : 'Vergroot');
+      }
       this.chatInput.setAttribute('aria-label', this.i18n.placeholder || (this.lang === 'FR' ? 'Tapez votre question' : 'Typ je vraag'));
       this.chatSend.setAttribute('aria-label', this.i18n.send || (this.lang === 'FR' ? 'Envoyer' : 'Verstuur'));
       this.chatReset.setAttribute('aria-label', this.i18n.reset_title || (this.lang === 'FR' ? 'Reinitialiser la conversation' : 'Gesprek resetten'));
@@ -524,6 +592,7 @@ document.addEventListener('DOMContentLoaded', function () {
           this.chatbot.style.display = 'flex';
           this.toggleButton.style.display = 'none';
           requestAnimationFrame(() => this.chatbot.classList.add('is-open'));
+          this.syncExpandedViewportState();
           this.showWelcomeOnce(200);
           setTimeout(() => {
             if (!this.chatInput.disabled) this.chatInput.focus();
@@ -537,8 +606,13 @@ document.addEventListener('DOMContentLoaded', function () {
         setTimeout(() => {
           this.chatbot.style.display = 'none';
           if (this.toggleButton) this.toggleButton.style.display = 'flex';
+          this.syncExpandedViewportState();
         }, delay);
       });
+
+      if (this.chatExpand) {
+        this.chatExpand.addEventListener('click', () => this.toggleExpanded());
+      }
 
       this.topicBadge.addEventListener('click', () => {
         if (!this.showTopicSelector) return;
@@ -589,8 +663,57 @@ document.addEventListener('DOMContentLoaded', function () {
       });
     }
 
+    getExpandLabel(expanded) {
+      if (expanded) {
+        return this.lang === 'FR' ? 'Reduire le chat' : 'Chat verkleinen';
+      }
+      return this.lang === 'FR' ? 'Agrandir le chat' : 'Chat vergroten';
+    }
+
+    syncExpandedViewportState() {
+      const isVisible = this.isEmbedded || this.chatbot.style.display !== 'none';
+      document.body.classList.toggle('octopus-chat-expanded', this.isExpanded && isVisible);
+    }
+
+    setExpandedState(expanded, options) {
+      const config = options && typeof options === 'object' ? options : {};
+      const persist = config.persist !== false;
+      const keepFocus = config.focus !== false;
+
+      this.isExpanded = !!expanded;
+      this.chatbot.classList.toggle('is-expanded', this.isExpanded);
+      this.root.classList.toggle('is-expanded', this.isExpanded);
+
+      if (this.chatExpand) {
+        const label = this.getExpandLabel(this.isExpanded);
+        this.chatExpand.setAttribute('aria-pressed', this.isExpanded ? 'true' : 'false');
+        this.chatExpand.setAttribute('aria-label', label);
+        this.chatExpand.setAttribute('title', label);
+      }
+
+      if (this.chatExpandIcon) {
+        this.chatExpandIcon.textContent = this.isExpanded ? '⤡' : '⤢';
+      }
+
+      if (persist) {
+        sessionStorage.setItem(this.expandedStorageKey, this.isExpanded ? '1' : '0');
+      }
+
+      this.syncExpandedViewportState();
+
+      if (keepFocus && this.chatInput && !this.chatInput.disabled && (this.isEmbedded || this.chatbot.style.display !== 'none')) {
+        setTimeout(() => this.chatInput.focus(), 40);
+      }
+    }
+
+    toggleExpanded() {
+      this.setExpandedState(!this.isExpanded);
+    }
+
     restoreSessionState() {
       this.selectedTopic = sessionStorage.getItem(this.topicStorageKey) || '';
+      this.isExpanded = sessionStorage.getItem(this.expandedStorageKey) === '1';
+      this.setExpandedState(this.isExpanded, { persist: false, focus: false });
       this.restoreFeedbackSet();
       this.restoreMessages();
     }

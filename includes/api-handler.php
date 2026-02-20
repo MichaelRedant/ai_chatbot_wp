@@ -391,6 +391,378 @@ if (!function_exists('octopus_ai_detect_topic_mismatch')) {
     }
 }
 
+if (!function_exists('octopus_ai_get_reference_query_terms')) {
+    function octopus_ai_get_reference_query_terms($question)
+    {
+        $normalized = octopus_ai_normalize_scope_text($question);
+        if ($normalized === '') {
+            return [];
+        }
+
+        $parts = preg_split('/\s+/u', $normalized, -1, PREG_SPLIT_NO_EMPTY);
+        if (!is_array($parts)) {
+            return [];
+        }
+
+        $stopwords = [
+            'de', 'het', 'een', 'en', 'of', 'van', 'voor', 'met', 'naar', 'op', 'in', 'te', 'om',
+            'ik', 'je', 'jij', 'u', 'wij', 'we', 'jullie', 'zij', 'hun', 'mij', 'me',
+            'wat', 'welk', 'welke', 'hoe', 'waar', 'waarom', 'wanneer', 'kan', 'mag', 'moet',
+            'le', 'la', 'les', 'un', 'une', 'des', 'du', 'de', 'dans', 'sur', 'pour', 'avec', 'sans',
+            'je', 'tu', 'vous', 'nous', 'ils', 'elles', 'qui', 'que', 'quoi', 'comment', 'ou', 'quand',
+            'the', 'and', 'for', 'with', 'from', 'this', 'that', 'what', 'how', 'where', 'when',
+        ];
+
+        $terms = [];
+        foreach ($parts as $part) {
+            $part = trim((string) $part);
+            if ($part === '' || in_array($part, $stopwords, true)) {
+                continue;
+            }
+            if (strlen($part) < 3) {
+                continue;
+            }
+            if (!in_array($part, $terms, true)) {
+                $terms[] = $part;
+            }
+        }
+
+        if (empty($terms) && $normalized !== '') {
+            $terms[] = $normalized;
+        }
+
+        return $terms;
+    }
+}
+
+if (!function_exists('octopus_ai_score_reference_candidate')) {
+    function octopus_ai_score_reference_candidate($question, $topic, $title, $slug, $url, $base_score = 0.0)
+    {
+        $topic = sanitize_key((string) $topic);
+        $url = esc_url_raw((string) $url);
+        if ($url === '') {
+            return -100.0;
+        }
+
+        $score = (float) $base_score;
+
+        $title_norm = octopus_ai_normalize_scope_text($title);
+        $slug_norm = octopus_ai_normalize_scope_text(str_replace(['-', '_', '.', '/'], ' ', (string) $slug));
+        $url_norm = octopus_ai_normalize_scope_text($url);
+        $path = (string) wp_parse_url($url, PHP_URL_PATH);
+        $path_norm = octopus_ai_normalize_scope_text(str_replace(['-', '_', '.', '/'], ' ', $path));
+
+        $query_terms = octopus_ai_get_reference_query_terms($question);
+        foreach ($query_terms as $term) {
+            if ($title_norm !== '' && strpos($title_norm, $term) !== false) {
+                $score += 6.0;
+            }
+            if ($slug_norm !== '' && strpos($slug_norm, $term) !== false) {
+                $score += 5.0;
+            }
+            if ($path_norm !== '' && strpos($path_norm, $term) !== false) {
+                $score += 4.0;
+            }
+            if ($url_norm !== '' && strpos($url_norm, $term) !== false) {
+                $score += 2.5;
+            }
+        }
+
+        if ($topic !== '') {
+            $topic_terms_map = octopus_ai_get_topic_terms_map();
+            $topic_terms = isset($topic_terms_map[$topic]) && is_array($topic_terms_map[$topic])
+                ? $topic_terms_map[$topic]
+                : [];
+
+            $topic_hits = 0;
+            foreach ($topic_terms as $topic_term) {
+                $topic_term = octopus_ai_normalize_scope_text($topic_term);
+                if ($topic_term === '' || strlen($topic_term) < 3) {
+                    continue;
+                }
+
+                $found = false;
+                if ($title_norm !== '' && strpos($title_norm, $topic_term) !== false) {
+                    $score += 1.6;
+                    $found = true;
+                }
+                if ($slug_norm !== '' && strpos($slug_norm, $topic_term) !== false) {
+                    $score += 1.4;
+                    $found = true;
+                }
+                if ($path_norm !== '' && strpos($path_norm, $topic_term) !== false) {
+                    $score += 1.1;
+                    $found = true;
+                }
+
+                if ($found) {
+                    $topic_hits++;
+                }
+            }
+
+            if ($topic_hits > 0) {
+                $score += min(6.0, $topic_hits * 0.6);
+            } else {
+                $score -= 1.0;
+            }
+        }
+
+        $path_lower = strtolower((string) $path);
+        $path_trim = trim($path_lower, '/');
+        if ($path_trim === '' || preg_match('#^manual(?:/(nl|fr))?$#', $path_trim)) {
+            $score -= 6.0;
+        }
+        if (strpos($url_norm, 'hmftsearch htm') !== false) {
+            $score -= 10.0;
+        }
+        if (preg_match('#/(index|default)\.html?$#i', $path_lower)) {
+            $score -= 3.0;
+        }
+        if (preg_match('#\.html?$#i', $path_lower) && substr_count($path_trim, '/') >= 1) {
+            $score += 1.2;
+        }
+
+        return (float) $score;
+    }
+}
+
+if (!function_exists('octopus_ai_build_reference_title')) {
+    function octopus_ai_build_reference_title($title, $slug, $url, $lang = 'NL')
+    {
+        $title = trim(sanitize_text_field((string) $title));
+        if ($title !== '') {
+            return $title;
+        }
+
+        $slug_candidate = trim((string) pathinfo((string) $slug, PATHINFO_FILENAME));
+        if ($slug_candidate !== '') {
+            $label = ucwords(str_replace(['-', '_'], ' ', $slug_candidate));
+            $label = trim(sanitize_text_field($label));
+            if ($label !== '') {
+                return $label;
+            }
+        }
+
+        $path = (string) wp_parse_url((string) $url, PHP_URL_PATH);
+        $path_candidate = trim((string) pathinfo($path, PATHINFO_FILENAME));
+        if ($path_candidate !== '') {
+            $label = ucwords(str_replace(['-', '_'], ' ', $path_candidate));
+            $label = trim(sanitize_text_field($label));
+            if ($label !== '') {
+                return $label;
+            }
+        }
+
+        return strtoupper((string) $lang) === 'FR'
+            ? 'Voir dans le manuel'
+            : 'Bekijk dit in de handleiding';
+    }
+}
+
+if (!function_exists('octopus_ai_build_manual_topic_index')) {
+    function octopus_ai_build_manual_topic_index($lang = 'NL')
+    {
+        if (!function_exists('octopus_ai_get_chunk_index')) {
+            $context_helper = __DIR__ . '/context-retriever.php';
+            if (file_exists($context_helper)) {
+                require_once $context_helper;
+            }
+        }
+
+        if (!function_exists('octopus_ai_get_chunk_index') || !function_exists('octopus_ai_get_manual_url_candidates')) {
+            return [];
+        }
+
+        $lang = strtoupper((string) $lang) === 'FR' ? 'FR' : 'NL';
+        $upload_dir = wp_upload_dir();
+        $chunks_dir = trailingslashit($upload_dir['basedir']) . 'octopus-ai-chunks/';
+        if (!is_dir($chunks_dir)) {
+            return [];
+        }
+
+        $index_data = octopus_ai_get_chunk_index($chunks_dir);
+        if (!is_array($index_data)) {
+            return [];
+        }
+
+        $signature = isset($index_data['signature']) ? (string) $index_data['signature'] : 'empty';
+        $cache_key = 'octopus_ai_manual_topics_' . md5($lang . '|' . $signature);
+        $cached = get_transient($cache_key);
+        if (is_array($cached)) {
+            return $cached;
+        }
+
+        $entries = isset($index_data['entries']) && is_array($index_data['entries'])
+            ? $index_data['entries']
+            : [];
+        if (empty($entries)) {
+            set_transient($cache_key, [], 20 * MINUTE_IN_SECONDS);
+            return [];
+        }
+
+        $topics_by_url = [];
+        foreach ($entries as $entry) {
+            if (!is_array($entry)) {
+                continue;
+            }
+
+            $meta = isset($entry['metadata']) && is_array($entry['metadata']) ? $entry['metadata'] : [];
+            $candidates = octopus_ai_get_manual_url_candidates($meta, $lang);
+            if (empty($candidates)) {
+                continue;
+            }
+
+            $section_title = (string) ($meta['section_title'] ?? '');
+            $page_slug = (string) ($meta['page_slug'] ?? '');
+            $source_url = (string) ($meta['source_url'] ?? '');
+            $manual_url = (string) ($meta['manual_url'] ?? '');
+            $content_preview_norm = (string) ($entry['content_preview_norm'] ?? '');
+
+            $blob_parts = [];
+            $blob_parts[] = octopus_ai_normalize_scope_text($section_title);
+            $blob_parts[] = octopus_ai_normalize_scope_text(str_replace(['-', '_', '/', '.'], ' ', $page_slug));
+            $blob_parts[] = octopus_ai_normalize_scope_text(str_replace(['-', '_', '/', '.'], ' ', $source_url));
+            $blob_parts[] = octopus_ai_normalize_scope_text(str_replace(['-', '_', '/', '.'], ' ', $manual_url));
+            $blob_parts[] = octopus_ai_normalize_scope_text($content_preview_norm);
+            $blob = trim(implode(' ', array_filter($blob_parts)));
+
+            foreach ($candidates as $candidate_url) {
+                $candidate_url = esc_url_raw((string) $candidate_url);
+                if ($candidate_url === '' || !octopus_ai_is_allowed_manual_url($candidate_url, $lang)) {
+                    continue;
+                }
+
+                if (!isset($topics_by_url[$candidate_url])) {
+                    $topics_by_url[$candidate_url] = [
+                        'url' => $candidate_url,
+                        'title' => '',
+                        'slug' => '',
+                        'blob' => '',
+                        'hits' => 0,
+                    ];
+                }
+
+                if ($topics_by_url[$candidate_url]['title'] === '' && trim($section_title) !== '') {
+                    $topics_by_url[$candidate_url]['title'] = trim($section_title);
+                }
+                if ($topics_by_url[$candidate_url]['slug'] === '' && trim($page_slug) !== '') {
+                    $topics_by_url[$candidate_url]['slug'] = trim($page_slug);
+                }
+
+                if ($blob !== '') {
+                    $topics_by_url[$candidate_url]['blob'] .= ' ' . $blob;
+                }
+                $topics_by_url[$candidate_url]['hits'] = (int) $topics_by_url[$candidate_url]['hits'] + 1;
+            }
+        }
+
+        $result = array_values($topics_by_url);
+        set_transient($cache_key, $result, 20 * MINUTE_IN_SECONDS);
+
+        return $result;
+    }
+}
+
+if (!function_exists('octopus_ai_select_topic_reference_links')) {
+    function octopus_ai_select_topic_reference_links($question, $topic = '', $lang = 'NL', $limit = 5)
+    {
+        $limit = max(1, min(10, (int) $limit));
+        $topic_index = octopus_ai_build_manual_topic_index($lang);
+        if (empty($topic_index)) {
+            return [];
+        }
+
+        $topic = sanitize_key((string) $topic);
+        $query_terms = octopus_ai_get_reference_query_terms($question);
+        $topic_terms_map = octopus_ai_get_topic_terms_map();
+        $topic_terms = ($topic !== '' && isset($topic_terms_map[$topic]) && is_array($topic_terms_map[$topic]))
+            ? $topic_terms_map[$topic]
+            : [];
+
+        $scored = [];
+        foreach ($topic_index as $row) {
+            if (!is_array($row)) {
+                continue;
+            }
+
+            $url = esc_url_raw((string) ($row['url'] ?? ''));
+            if ($url === '') {
+                continue;
+            }
+
+            $title = (string) ($row['title'] ?? '');
+            $slug = (string) ($row['slug'] ?? '');
+            $blob = octopus_ai_normalize_scope_text((string) ($row['blob'] ?? ''));
+            $hits = max(1, (int) ($row['hits'] ?? 1));
+
+            $score = octopus_ai_score_reference_candidate($question, $topic, $title, $slug, $url, 0.0);
+            $score += min(4.0, $hits * 0.15);
+
+            foreach ($query_terms as $term) {
+                $term = octopus_ai_normalize_scope_text($term);
+                if ($term === '' || $blob === '') {
+                    continue;
+                }
+
+                $occurrences = substr_count($blob, $term);
+                if ($occurrences > 0) {
+                    $score += min(8.0, 1.8 + ($occurrences * 1.1));
+                }
+            }
+
+            foreach ($topic_terms as $term) {
+                $term = octopus_ai_normalize_scope_text($term);
+                if ($term === '' || strlen($term) < 3 || $blob === '') {
+                    continue;
+                }
+                if (strpos($blob, $term) !== false) {
+                    $score += 0.9;
+                }
+            }
+
+            if ($blob === '') {
+                $score -= 1.2;
+            }
+
+            $scored[] = [
+                'title' => octopus_ai_build_reference_title($title, $slug, $url, $lang),
+                'url' => $url,
+                'score' => (float) $score,
+            ];
+        }
+
+        if (empty($scored)) {
+            return [];
+        }
+
+        usort($scored, static function ($a, $b) {
+            $score_a = isset($a['score']) ? (float) $a['score'] : 0.0;
+            $score_b = isset($b['score']) ? (float) $b['score'] : 0.0;
+            if ($score_a === $score_b) {
+                return 0;
+            }
+            return ($score_a < $score_b) ? 1 : -1;
+        });
+
+        $unique = [];
+        $result = [];
+        foreach ($scored as $candidate) {
+            $url = (string) ($candidate['url'] ?? '');
+            if ($url === '' || isset($unique[$url])) {
+                continue;
+            }
+
+            $unique[$url] = true;
+            $result[] = $candidate;
+            if (count($result) >= $limit) {
+                break;
+            }
+        }
+
+        return $result;
+    }
+}
+
 if (!function_exists('octopus_ai_is_3d_printing_question')) {
     function octopus_ai_is_3d_printing_question($message)
     {
@@ -1436,11 +1808,54 @@ EOT;
     $primary_doc_url     = '';
     $best_metadata_link  = '';
     $best_metadata_score = -1.0;
+    $best_live_link      = '';
+    $best_live_score     = -1.0;
+    $best_topic_link     = '';
+    $best_topic_score    = -1.0;
+
+    $topic_reference_links = function_exists('octopus_ai_select_topic_reference_links')
+        ? octopus_ai_select_topic_reference_links($message, $topic, $lang, 5)
+        : [];
+
+    if (!empty($topic_reference_links)) {
+        $system_prompt .= "\n\nGecross-referencede topic-links (handleiding):\n";
+        foreach ($topic_reference_links as $candidate) {
+            if (!is_array($candidate)) {
+                continue;
+            }
+
+            $candidate_url = esc_url_raw((string) ($candidate['url'] ?? ''));
+            if ($candidate_url === '') {
+                continue;
+            }
+
+            $candidate_title = sanitize_text_field((string) ($candidate['title'] ?? ''));
+            $candidate_score = isset($candidate['score']) ? (float) $candidate['score'] : 0.0;
+            $candidate_label = $candidate_title !== ''
+                ? $candidate_title
+                : (($lang === 'FR') ? 'Voir dans le manuel' : 'Bekijk dit in de handleiding');
+
+            $system_prompt .= "- [{$candidate_label}]({$candidate_url})\n";
+
+            if ($candidate_score > $best_topic_score) {
+                $best_topic_score = $candidate_score;
+                $best_topic_link = $candidate_url;
+            }
+
+            $reference_candidates[] = [
+                'title' => $candidate_label,
+                'url' => $candidate_url,
+                'score' => $candidate_score + 0.4,
+            ];
+            $validLinkFound = true;
+        }
+    }
+
     if (!empty($metadata_chunks)) {
         $system_prompt .= "\n\nDeze informatie komt uit de volgende onderdelen:\n";
         foreach ($metadata_chunks as $meta) {
-            $title        = sanitize_text_field($meta['section_title'] ?? '');
-            $slug         = sanitize_text_field($meta['page_slug'] ?? '');
+            $title         = sanitize_text_field($meta['section_title'] ?? '');
+            $slug          = sanitize_text_field($meta['page_slug'] ?? '');
             $current_score = isset($meta['score']) ? (float) $meta['score'] : 0.0;
 
             $manual_candidates = function_exists('octopus_ai_get_manual_url_candidates')
@@ -1463,44 +1878,56 @@ EOT;
 
                 $path = (string) wp_parse_url($candidate_url, PHP_URL_PATH);
                 $is_manual_path = stripos($path, '/manual/') !== false;
+                $candidate_score = octopus_ai_score_reference_candidate(
+                    $message,
+                    $topic,
+                    $title,
+                    $slug,
+                    $candidate_url,
+                    $current_score
+                );
 
                 $possible_links[] = [
                     'url'       => $candidate_url,
                     'is_manual' => $is_manual_path,
                     'is_valid'  => true,
+                    'score'     => $candidate_score,
                 ];
             }
 
-            if ($title && !empty($possible_links)) {
-                $system_prompt .= "- *{$title}*\n";
+            if (!empty($possible_links)) {
+                if ($title !== '') {
+                    $system_prompt .= "- *{$title}*\n";
+                }
+
                 foreach ($possible_links as $link_info) {
                     $link  = $link_info['url'];
+                    $score = isset($link_info['score']) ? (float) $link_info['score'] : 0.0;
                     $label = ($lang === 'FR') ? 'Voir dans le manuel' : 'Bekijk dit in de handleiding';
                     if ($link && !$link_info['is_manual']) {
                         $label = ($lang === 'FR') ? 'Voir la source' : 'Bekijk de bron';
                     }
 
-                    $system_prompt .= "  [{$label}]({$link})\n";
+                    if ($title !== '') {
+                        $system_prompt .= "  [{$label}]({$link})\n";
+                    } else {
+                        $system_prompt .= "- [{$label}]({$link})\n";
+                    }
 
                     if ($link_info['is_valid']) {
                         if (
-                            $current_score > $best_metadata_score ||
-                            ($current_score === $best_metadata_score && $best_metadata_link === '')
+                            $score > $best_metadata_score ||
+                            ($score === $best_metadata_score && $best_metadata_link === '')
                         ) {
-                            $best_metadata_score = $current_score;
+                            $best_metadata_score = $score;
                             $best_metadata_link  = $link;
                         }
                         $validLinkFound = true;
 
-                        $reference_title = $title;
-                        if ($reference_title === '' && $slug !== '') {
-                            $reference_title = ucwords(str_replace(['-', '_'], ' ', pathinfo($slug, PATHINFO_FILENAME)));
-                        }
-
                         $reference_candidates[] = [
-                            'title' => $reference_title,
+                            'title' => octopus_ai_build_reference_title($title, $slug, $link, $lang),
                             'url'   => $link,
-                            'score' => $current_score,
+                            'score' => $score,
                         ];
                     }
                 }
@@ -1511,26 +1938,95 @@ EOT;
     if (!empty($live_sources)) {
         $system_prompt .= "\n\nLive bronnen:\n";
         foreach ($live_sources as $index => $link) {
+            $link = esc_url_raw((string) $link);
+            if ($link === '') {
+                continue;
+            }
+
             $label = ($lang === 'FR') ? 'Voir dans le manuel' : 'Bekijk dit in de handleiding';
-            if ($link && strpos($link, 'octopus.be/manual') === false) {
+            if (strpos($link, 'octopus.be/manual') === false) {
                 $label = ($lang === 'FR') ? 'Voir la source' : 'Bekijk de bron';
             }
             $system_prompt .= "- [{$label}]({$link})\n";
 
+            $base_live_score = max(0.1, $live_best_score - ($index * 0.1));
+            $live_link_score = octopus_ai_score_reference_candidate(
+                $message,
+                $topic,
+                '',
+                '',
+                $link,
+                $base_live_score
+            );
+
+            if ($live_link_score > $best_live_score) {
+                $best_live_score = $live_link_score;
+                $best_live_link = $link;
+            }
+
             $reference_candidates[] = [
                 'title' => ($lang === 'FR') ? 'Page du manuel' : 'Handleidingpagina',
                 'url'   => $link,
-                'score' => max(0.1, $live_best_score - ($index * 0.1)),
+                'score' => $live_link_score,
             ];
+            $validLinkFound = true;
         }
     }
 
-    $preferred_doc_url = $best_metadata_link;
     if (!empty($live_best_source)) {
-        $preferred_doc_url = (
-            $preferred_doc_url === '' ||
-            $live_best_score > $best_metadata_score + 0.01
-        ) ? $live_best_source : $preferred_doc_url;
+        $live_best_source = esc_url_raw((string) $live_best_source);
+        if ($live_best_source !== '') {
+            $candidate_live_best_score = octopus_ai_score_reference_candidate(
+                $message,
+                $topic,
+                '',
+                '',
+                $live_best_source,
+                max($live_best_score, 0.1)
+            );
+
+            if ($candidate_live_best_score > $best_live_score) {
+                $best_live_score = $candidate_live_best_score;
+                $best_live_link = $live_best_source;
+            }
+        }
+    }
+
+    $preferred_doc_url = '';
+    $preferred_doc_score = -1000.0;
+    $preferred_candidates = [
+        [
+            'url' => $best_topic_link,
+            'score' => $best_topic_score,
+        ],
+        [
+            'url' => $best_live_link,
+            'score' => $best_live_score,
+        ],
+        [
+            'url' => $best_metadata_link,
+            'score' => $best_metadata_score,
+        ],
+    ];
+
+    if (!empty($live_best_source)) {
+        $preferred_candidates[] = [
+            'url' => esc_url_raw((string) $live_best_source),
+            'score' => max(0.1, $live_best_score),
+        ];
+    }
+
+    foreach ($preferred_candidates as $candidate) {
+        $candidate_url = esc_url_raw((string) ($candidate['url'] ?? ''));
+        $candidate_score = isset($candidate['score']) ? (float) $candidate['score'] : -1000.0;
+        if ($candidate_url === '') {
+            continue;
+        }
+
+        if ($candidate_score > $preferred_doc_score) {
+            $preferred_doc_score = $candidate_score;
+            $preferred_doc_url = $candidate_url;
+        }
     }
 
     if ($preferred_doc_url !== '') {
@@ -1539,17 +2035,20 @@ EOT;
     }
 
     if ($primary_doc_url === '' && !empty($live_sources)) {
-        $primary_doc_url = $live_sources[0];
+        $primary_doc_url = esc_url_raw((string) $live_sources[0]);
         if ($primary_doc_url !== '') {
             $validLinkFound = true;
         }
     }
 
     if ($primary_doc_url !== '') {
+        $primary_label = ($lang === 'FR') ? 'Lien principal du manuel' : 'Primaire handleidinglink';
+        $system_prompt .= "\n\n{$primary_label}:\n[{$primary_label}]({$primary_doc_url})\n";
+
         $reference_candidates[] = [
             'title' => ($lang === 'FR') ? 'Page du manuel' : 'Handleidingpagina',
             'url'   => $primary_doc_url,
-            'score' => max($best_metadata_score, $live_best_score, 0.1),
+            'score' => max($best_topic_score, $best_metadata_score, $best_live_score, 0.1),
         ];
     }
 

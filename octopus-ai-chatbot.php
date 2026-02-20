@@ -791,6 +791,9 @@ function octopus_ai_enqueue_frontend_assets($render_context = null)
                 'switch_yes' => $is_french ? 'Oui, basculer' : 'Ja, overschakelen',
                 'switch_no' => $is_french ? 'Non, rester ici' : 'Nee, hier blijven',
                 'switch_stay_notice' => $is_french ? "D'accord, je reste dans le flux actuel." : 'Prima, ik blijf in je huidige flow.',
+                'ai_disclaimer' => $is_french
+                    ? "Remarque: ce chatbot utilise l'IA. Les reponses sont generees automatiquement, a titre informatif, et peuvent etre inexactes ou incompletes. Ceci ne constitue pas un avis juridique, fiscal ou comptable. Verifie toujours dans la documentation officielle."
+                    : 'Let op: deze chatbot gebruikt AI. Antwoorden worden automatisch gegenereerd, zijn enkel informatief en kunnen onjuist of onvolledig zijn. Dit is geen juridisch, fiscaal of boekhoudkundig advies. Verifieer altijd in de officiele handleiding.',
                 'api_error' => $is_french ? "❌ Une erreur s'est produite lors de la récupération de la réponse." : '❌ Er ging iets mis met het ophalen van het antwoord.',
             ),
         )
