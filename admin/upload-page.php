@@ -161,6 +161,24 @@ if (!function_exists('octopus_ai_extract_text_from_uploaded_file')) {
     }
 }
 
+if (!function_exists('octopus_ai_get_shared_chunker')) {
+    function octopus_ai_get_shared_chunker()
+    {
+        if (!class_exists('\OctopusAI\Includes\Chunker')) {
+            $chunker_file = __DIR__ . '/../includes/pdf-chunker.php';
+            if (file_exists($chunker_file)) {
+                require_once $chunker_file;
+            }
+        }
+
+        if (!class_exists('\OctopusAI\Includes\Chunker')) {
+            return null;
+        }
+
+        return new \OctopusAI\Includes\Chunker(700, 120);
+    }
+}
+
 add_action('admin_menu', function() {
     add_submenu_page(
         'octopus-ai-chatbot',
@@ -214,7 +232,43 @@ function octopus_ai_pdf_upload_page() {
                 }
 
                 // Chunking
-                $chunks = str_split($text, 1000);
+                $source_type = strtolower((string) pathinfo($original_name, PATHINFO_EXTENSION));
+                $source_title = (string) pathinfo($original_name, PATHINFO_FILENAME);
+                if ($source_title === '') {
+                    $source_title = 'kennisbron';
+                }
+                $source_url = isset($uploaded['url']) ? esc_url_raw((string) $uploaded['url']) : '';
+                $chunker = octopus_ai_get_shared_chunker();
+                $chunks = [];
+                if ($chunker) {
+                    $chunks = $chunker->chunkTextWithMetadata(
+                        (string) $text,
+                        $source_title,
+                        $source_url,
+                        [
+                            'source_type' => $source_type,
+                            'manual_url' => '',
+                        ]
+                    );
+                }
+
+                if (!is_array($chunks) || empty($chunks)) {
+                    $chunks = [[
+                        'content' => trim((string) $text),
+                        'metadata' => [
+                            'source_title' => $source_title,
+                            'page_slug' => sanitize_title($source_title),
+                            'original_page' => '1',
+                            'section_title' => '',
+                            'source_type' => $source_type,
+                            'source_url' => $source_url,
+                            'manual_url' => '',
+                            'chunk_index' => 1,
+                            'index_terms' => [],
+                        ],
+                    ]];
+                }
+
                 $upload_dir = wp_upload_dir();
                 $chunks_dir = trailingslashit($upload_dir['basedir']) . 'octopus-ai-chunks/';
                 if (!file_exists($chunks_dir)) {
@@ -231,20 +285,30 @@ function octopus_ai_pdf_upload_page() {
                     unlink($old);
                 }
 
+                $json_flags = function_exists('octopus_ai_get_chunk_json_encode_flags')
+                    ? octopus_ai_get_chunk_json_encode_flags()
+                    : JSON_UNESCAPED_UNICODE;
                 foreach ($chunks as $index => $chunk) {
-
-                    $chunk_file = $chunks_dir . $slug . '_chunk_' . $index . '.json';
+                    $chunk_number = $index + 1;
+                    $meta = isset($chunk['metadata']) && is_array($chunk['metadata']) ? $chunk['metadata'] : [];
+                    $chunk_file = $chunks_dir . $slug . '_chunk_' . $chunk_number . '.json';
                     $data = [
-                        'content'  => $chunk,
+                        'content'  => isset($chunk['content']) ? (string) $chunk['content'] : '',
                         'metadata' => [
-                            'source_title' => $slug,
-                            'page_slug'     => $slug . '-p' . ($index + 1),
-                            'original_page' => $index + 1,
-                            'section_title' => '',
-                            'source_type' => strtolower((string) pathinfo($original_name, PATHINFO_EXTENSION)),
+                            'source_title' => (string) ($meta['source_title'] ?? $source_title),
+                            'page_slug' => (string) ($meta['page_slug'] ?? ($slug . '-p' . $chunk_number)),
+                            'original_page' => (string) ($meta['original_page'] ?? $chunk_number),
+                            'section_title' => (string) ($meta['section_title'] ?? ''),
+                            'source_type' => (string) ($meta['source_type'] ?? $source_type),
+                            'source_url' => esc_url_raw((string) ($meta['source_url'] ?? $source_url)),
+                            'manual_url' => esc_url_raw((string) ($meta['manual_url'] ?? '')),
+                            'chunk_index' => (int) ($meta['chunk_index'] ?? $chunk_number),
+                            'index_terms' => isset($meta['index_terms']) && is_array($meta['index_terms'])
+                                ? array_values(array_filter(array_map('strval', $meta['index_terms'])))
+                                : [],
                         ],
                     ];
-                    file_put_contents($chunk_file, wp_json_encode($data, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT));
+                    file_put_contents($chunk_file, wp_json_encode($data, $json_flags));
 
                 }
 

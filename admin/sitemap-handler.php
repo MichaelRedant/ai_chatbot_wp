@@ -6,6 +6,7 @@ if (!defined('ABSPATH')) {
 add_action('admin_post_octopus_ai_upload_sitemap', 'octopus_ai_handle_sitemap_upload');
 add_action('admin_post_octopus_ai_auto_fetch_sitemap', 'octopus_ai_auto_fetch_sitemap');
 add_action('admin_post_octopus_ai_import_sitemap_url', 'octopus_ai_import_sitemap_url');
+add_action('admin_post_octopus_ai_refresh_sitemap', 'octopus_ai_refresh_sitemap');
 add_action('octopus_ai_process_sitemap_queue', 'octopus_ai_process_sitemap_queue');
 add_action('admin_init', 'octopus_ai_maybe_schedule_sitemap_queue');
 
@@ -20,6 +21,50 @@ function octopus_ai_get_sitemap_queue() {
 
 function octopus_ai_set_sitemap_queue(array $queue) {
     update_option('octopus_ai_sitemap_queue', array_values($queue), false);
+}
+
+if (!function_exists('octopus_ai_get_sitemap_queue_batch_size')) {
+    function octopus_ai_get_sitemap_queue_batch_size($queue_size = 0) {
+        $mb = defined('MB_IN_BYTES') ? (int) MB_IN_BYTES : (1024 * 1024);
+        $memory_limit = function_exists('octopus_ai_get_memory_limit_bytes')
+            ? (int) octopus_ai_get_memory_limit_bytes()
+            : 0;
+
+        $batch = 20;
+        if ($memory_limit > 0 && $memory_limit < 256 * $mb) {
+            $batch = 10;
+        } elseif ($memory_limit >= 768 * $mb) {
+            $batch = 40;
+        } elseif ($memory_limit >= 512 * $mb) {
+            $batch = 30;
+        }
+
+        $queue_size = max(0, (int) $queue_size);
+        if ($queue_size >= 120) {
+            $batch += 10;
+        } elseif ($queue_size >= 50) {
+            $batch += 5;
+        }
+
+        $batch = (int) apply_filters('octopus_ai_sitemap_queue_batch_size', $batch, $queue_size, $memory_limit);
+        return max(5, min(80, $batch));
+    }
+}
+
+if (!function_exists('octopus_ai_get_sitemap_queue_delay_seconds')) {
+    function octopus_ai_get_sitemap_queue_delay_seconds($context = 'default') {
+        $context = sanitize_key((string) $context);
+        $delay_map = [
+            'enqueue' => 2,
+            'resume' => 2,
+            'locked' => 8,
+            'missing_dependency' => 25,
+            'next_batch' => 3,
+        ];
+        $delay = isset($delay_map[$context]) ? (int) $delay_map[$context] : 5;
+        $delay = (int) apply_filters('octopus_ai_sitemap_queue_delay_seconds', $delay, $context);
+        return max(1, $delay);
+    }
 }
 
 function octopus_ai_enqueue_sitemap_urls(array $urls) {
@@ -46,7 +91,7 @@ function octopus_ai_enqueue_sitemap_urls(array $urls) {
     ], false);
 
     if (!wp_next_scheduled('octopus_ai_process_sitemap_queue')) {
-        wp_schedule_single_event(time() + 10, 'octopus_ai_process_sitemap_queue');
+        wp_schedule_single_event(time() + octopus_ai_get_sitemap_queue_delay_seconds('enqueue'), 'octopus_ai_process_sitemap_queue');
     }
 
     return count($combined);
@@ -63,7 +108,7 @@ function octopus_ai_maybe_schedule_sitemap_queue() {
     }
 
     if (!wp_next_scheduled('octopus_ai_process_sitemap_queue')) {
-        wp_schedule_single_event(time() + 5, 'octopus_ai_process_sitemap_queue');
+        wp_schedule_single_event(time() + octopus_ai_get_sitemap_queue_delay_seconds('resume'), 'octopus_ai_process_sitemap_queue');
     }
 }
 
@@ -71,7 +116,7 @@ function octopus_ai_process_sitemap_queue() {
     $lock_key = 'octopus_ai_sitemap_queue_lock';
     if (get_transient($lock_key)) {
         if (!wp_next_scheduled('octopus_ai_process_sitemap_queue')) {
-            wp_schedule_single_event(time() + 20, 'octopus_ai_process_sitemap_queue');
+            wp_schedule_single_event(time() + octopus_ai_get_sitemap_queue_delay_seconds('locked'), 'octopus_ai_process_sitemap_queue');
         }
         return;
     }
@@ -79,13 +124,20 @@ function octopus_ai_process_sitemap_queue() {
     set_transient($lock_key, 1, 3 * MINUTE_IN_SECONDS);
 
     try {
+        if (function_exists('wp_raise_memory_limit')) {
+            wp_raise_memory_limit('admin');
+        }
+        if (function_exists('set_time_limit')) {
+            @set_time_limit(60);
+        }
+
         $queue = octopus_ai_get_sitemap_queue();
         if (empty($queue)) {
             delete_option('octopus_ai_sitemap_queue_status');
             return;
         }
 
-        $batch_size = 15;
+        $batch_size = octopus_ai_get_sitemap_queue_batch_size(count($queue));
         $batch = array_slice($queue, 0, $batch_size);
         $remaining = array_slice($queue, $batch_size);
         octopus_ai_set_sitemap_queue($remaining);
@@ -93,7 +145,7 @@ function octopus_ai_process_sitemap_queue() {
         if (!class_exists(\OctopusAI\Includes\SitemapParser::class)) {
             error_log('[Octopus AI] SitemapParser class ontbreekt, sitemap queue kan niet verwerkt worden.');
             if (!wp_next_scheduled('octopus_ai_process_sitemap_queue')) {
-                wp_schedule_single_event(time() + 60, 'octopus_ai_process_sitemap_queue');
+                wp_schedule_single_event(time() + octopus_ai_get_sitemap_queue_delay_seconds('missing_dependency'), 'octopus_ai_process_sitemap_queue');
             }
             return;
         }
@@ -115,7 +167,7 @@ function octopus_ai_process_sitemap_queue() {
         update_option('octopus_ai_sitemap_queue_status', $status, false);
 
         if (!empty($remaining) && !wp_next_scheduled('octopus_ai_process_sitemap_queue')) {
-            wp_schedule_single_event(time() + 15, 'octopus_ai_process_sitemap_queue');
+            wp_schedule_single_event(time() + octopus_ai_get_sitemap_queue_delay_seconds('next_batch'), 'octopus_ai_process_sitemap_queue');
         }
     } finally {
         delete_transient($lock_key);
@@ -149,7 +201,123 @@ function octopus_ai_get_site_root_url($url) {
     return trailingslashit($scheme . '://' . $parts['host'] . $port);
 }
 
-function octopus_ai_import_sitemap_from_input_url($input_url) {
+function octopus_ai_get_sitemap_sources() {
+    $raw_sources = get_option('octopus_ai_sitemap_sources', []);
+    if (!is_array($raw_sources)) {
+        return [];
+    }
+
+    $normalized = [];
+    foreach ($raw_sources as $key => $entry) {
+        $filename = basename((string) $key);
+        if (is_int($key) && is_array($entry) && !empty($entry['filename'])) {
+            $filename = basename((string) $entry['filename']);
+        }
+        if ($filename === '' || !preg_match('/\.xml$/i', $filename)) {
+            continue;
+        }
+
+        $source_url = '';
+        $input_url = '';
+        $updated_at = '';
+        $last_urls_count = null;
+
+        if (is_array($entry)) {
+            $source_url = esc_url_raw((string) ($entry['source_url'] ?? ''));
+            $input_url = esc_url_raw((string) ($entry['input_url'] ?? ''));
+            $updated_at = sanitize_text_field((string) ($entry['updated_at'] ?? ''));
+            if (isset($entry['last_urls_count'])) {
+                $last_urls_count = max(0, (int) $entry['last_urls_count']);
+            }
+        } elseif (is_string($entry)) {
+            $source_url = esc_url_raw($entry);
+        }
+
+        $normalized[$filename] = [
+            'source_url' => $source_url,
+            'input_url' => $input_url,
+            'updated_at' => $updated_at,
+            'last_urls_count' => $last_urls_count,
+        ];
+    }
+
+    return $normalized;
+}
+
+function octopus_ai_set_sitemap_sources(array $sources) {
+    update_option('octopus_ai_sitemap_sources', $sources, false);
+}
+
+function octopus_ai_register_sitemap_source($filename, $source_url, array $meta = []) {
+    $filename = basename((string) $filename);
+    if ($filename === '' || !preg_match('/\.xml$/i', $filename)) {
+        return;
+    }
+
+    $source_url = esc_url_raw((string) $source_url);
+    $input_url = esc_url_raw((string) ($meta['input_url'] ?? ''));
+    $last_urls_count = isset($meta['last_urls_count']) ? max(0, (int) $meta['last_urls_count']) : null;
+
+    $sources = octopus_ai_get_sitemap_sources();
+    $sources[$filename] = [
+        'source_url' => $source_url,
+        'input_url' => $input_url,
+        'updated_at' => current_time('mysql'),
+        'last_urls_count' => $last_urls_count,
+    ];
+    octopus_ai_set_sitemap_sources($sources);
+}
+
+function octopus_ai_unregister_sitemap_source($filename) {
+    $filename = basename((string) $filename);
+    if ($filename === '') {
+        return;
+    }
+
+    $sources = octopus_ai_get_sitemap_sources();
+    if (!isset($sources[$filename])) {
+        return;
+    }
+
+    unset($sources[$filename]);
+    octopus_ai_set_sitemap_sources($sources);
+}
+
+function octopus_ai_resolve_sitemap_source_url($filename, array $sources = []) {
+    $filename = basename((string) $filename);
+    if ($filename === '' || !preg_match('/\.xml$/i', $filename)) {
+        return '';
+    }
+
+    if (empty($sources)) {
+        $sources = octopus_ai_get_sitemap_sources();
+    }
+
+    if (isset($sources[$filename])) {
+        $entry = is_array($sources[$filename]) ? $sources[$filename] : [];
+        $source_url = esc_url_raw((string) ($entry['source_url'] ?? ''));
+        if ($source_url !== '') {
+            return $source_url;
+        }
+    }
+
+    if (preg_match('/^remote_([a-f0-9]{32})\.xml$/i', $filename, $matches)) {
+        $saved_sitemap_url = esc_url_raw((string) get_option('octopus_ai_sitemap_url', ''));
+        if ($saved_sitemap_url !== '' && md5($saved_sitemap_url) === strtolower((string) $matches[1])) {
+            return $saved_sitemap_url;
+        }
+    }
+
+    return '';
+}
+
+function octopus_ai_import_sitemap_from_input_url($input_url, array $args = []) {
+    $args = wp_parse_args($args, [
+        'force_filename' => '',
+        'save_active' => true,
+        'register_source' => true,
+    ]);
+
     $input_url = esc_url_raw(trim((string) $input_url));
     if ($input_url === '') {
         return new WP_Error('octopus_ai_sitemap_invalid_url', 'Geef een geldige URL op naar een sitemap of website.');
@@ -205,7 +373,13 @@ function octopus_ai_import_sitemap_from_input_url($input_url) {
         wp_mkdir_p($upload_path);
     }
 
-    $filename = 'remote_' . md5($sitemap_url) . '.xml';
+    $forced_filename = basename((string) ($args['force_filename'] ?? ''));
+    if ($forced_filename !== '' && preg_match('/\.xml$/i', $forced_filename)) {
+        $filename = $forced_filename;
+    } else {
+        $filename = 'remote_' . md5($sitemap_url) . '.xml';
+    }
+
     $destination = $upload_path . $filename;
     if (file_put_contents($destination, $content) === false) {
         return new WP_Error('octopus_ai_sitemap_store_failed', 'De sitemap kon niet lokaal worden opgeslagen.');
@@ -218,14 +392,77 @@ function octopus_ai_import_sitemap_from_input_url($input_url) {
 
     $queued = octopus_ai_enqueue_sitemap_urls($urls);
 
-    update_option('octopus_ai_sitemap_url', $sitemap_url);
+    if (!empty($args['save_active'])) {
+        update_option('octopus_ai_sitemap_url', $sitemap_url);
+    }
+
+    if (!empty($args['register_source'])) {
+        octopus_ai_register_sitemap_source($filename, $sitemap_url, [
+            'input_url' => $input_url,
+            'last_urls_count' => count($urls),
+        ]);
+    }
 
     return [
         'sitemap_url' => $sitemap_url,
         'urls_count'  => count($urls),
         'pages_count' => 0,
         'queued_count' => (int) $queued,
+        'filename' => $filename,
     ];
+}
+
+function octopus_ai_refresh_sitemap() {
+    $nonce = '';
+    if (isset($_REQUEST['octopus_ai_refresh_sitemap_nonce'])) {
+        $nonce = (string) wp_unslash($_REQUEST['octopus_ai_refresh_sitemap_nonce']);
+    } elseif (isset($_REQUEST['_wpnonce'])) {
+        $nonce = (string) wp_unslash($_REQUEST['_wpnonce']);
+    }
+
+    if (
+        !current_user_can('manage_options') ||
+        $nonce === '' ||
+        !wp_verify_nonce($nonce, 'octopus_ai_refresh_sitemap')
+    ) {
+        wp_die('Beveiligingsfout bij sitemap-update.');
+    }
+
+    $filename = isset($_REQUEST['sitemap_file']) ? basename((string) wp_unslash($_REQUEST['sitemap_file'])) : '';
+    if ($filename === '' || !preg_match('/\.xml$/i', $filename)) {
+        octopus_ai_sitemap_admin_redirect([
+            'sitemap_error' => 'Geen geldig sitemap-bestand geselecteerd voor update.',
+        ]);
+    }
+
+    $source_url = octopus_ai_resolve_sitemap_source_url($filename);
+    if ($source_url === '') {
+        octopus_ai_sitemap_admin_redirect([
+            'sitemap_error' => 'Deze sitemap heeft geen bekende bron-URL en kan niet automatisch bijgewerkt worden.',
+        ]);
+    }
+
+    $result = octopus_ai_import_sitemap_from_input_url($source_url, [
+        'force_filename' => $filename,
+        'save_active' => true,
+        'register_source' => true,
+    ]);
+
+    if (is_wp_error($result)) {
+        octopus_ai_sitemap_admin_redirect([
+            'sitemap_error' => $result->get_error_message(),
+        ]);
+    }
+
+    octopus_ai_sitemap_admin_redirect([
+        'upload' => 'sitemap',
+        'found' => (int) ($result['urls_count'] ?? 0),
+        'pages' => (int) ($result['pages_count'] ?? 0),
+        'queued' => (int) ($result['queued_count'] ?? 0),
+        'sitemap_saved' => 1,
+        'sitemap_refreshed' => 1,
+        'sitemap_file' => sanitize_file_name($filename),
+    ]);
 }
 
 function octopus_ai_handle_sitemap_upload() {
@@ -257,6 +494,9 @@ function octopus_ai_handle_sitemap_upload() {
                 if (move_uploaded_file($tmp_path, $dest_path)) {
                     $urls = octopus_ai_parse_sitemap($dest_path);
                     $all_urls = array_merge($all_urls, $urls);
+                    octopus_ai_register_sitemap_source($filename, '', [
+                        'last_urls_count' => count($urls),
+                    ]);
                 }
             }
         }
@@ -273,6 +513,10 @@ function octopus_ai_handle_sitemap_upload() {
                 file_put_contents($destination, $content);
                 $urls = octopus_ai_parse_sitemap($destination);
                 $all_urls = array_merge($all_urls, $urls);
+                octopus_ai_register_sitemap_source($filename, $remote_url, [
+                    'input_url' => $remote_url,
+                    'last_urls_count' => count($urls),
+                ]);
             }
         }
     }
@@ -567,6 +811,13 @@ add_action('admin_post_octopus_ai_delete_sitemaps', function () {
                 }
 
                 unlink($full_path);
+                octopus_ai_unregister_sitemap_source($safe_file);
+
+                $saved_sitemap_url = esc_url_raw((string) get_option('octopus_ai_sitemap_url', ''));
+                if ($saved_sitemap_url !== '' && $safe_file === ('remote_' . md5($saved_sitemap_url) . '.xml')) {
+                    delete_option('octopus_ai_sitemap_url');
+                }
+
                 $deleted++;
             }
         }

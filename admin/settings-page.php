@@ -37,7 +37,7 @@ add_action('admin_enqueue_scripts', function($hook) {
         wp_enqueue_script('octopus-ai-admin-media', plugin_dir_url(__FILE__) . '../assets/js/admin-media-uploader.js', array('jquery'), '1.0', true);
 
         wp_localize_script('octopus-ai-admin-settings', 'octopusAiAdminSettingsVars', array(
-            'queryParamsToClear' => array('upload', 'delete', 'bulk_delete', 'chunks_deleted', 'chunks_cleared', 'sitemap_debug', 'pages', 'found', 'queued', 'sitemap_saved', 'sitemap_error', 'pdf_queued', 'pdf_error', 'config_imported', 'config_updated', 'config_import_error', 'cleanup_purged', 'cleanup_options', 'cleanup_dirs', 'cleanup_tables', 'cleanup_error'),
+            'queryParamsToClear' => array('upload', 'delete', 'bulk_delete', 'chunks_deleted', 'chunks_cleared', 'sitemap_debug', 'pages', 'found', 'queued', 'sitemap_saved', 'sitemap_refreshed', 'sitemap_file', 'sitemap_error', 'pdf_queued', 'pdf_error', 'config_imported', 'config_updated', 'config_import_error', 'cleanup_purged', 'cleanup_options', 'cleanup_dirs', 'cleanup_tables', 'cleanup_error'),
         ));
     }
 });
@@ -58,9 +58,12 @@ function octopus_ai_register_settings() {
     register_setting('octopus_ai_settings_group', 'octopus_ai_header_text_color', 'sanitize_hex_color');
     register_setting('octopus_ai_settings_group', 'octopus_ai_test_mode', 'intval');
     register_setting('octopus_ai_settings_group', 'octopus_ai_fallback', 'sanitize_text_field');
+    register_setting('octopus_ai_settings_group', 'octopus_ai_confidence_threshold', 'octopus_ai_sanitize_confidence_threshold');
     register_setting('octopus_ai_settings_group', 'octopus_ai_primary_color', 'sanitize_hex_color');
     register_setting('octopus_ai_settings_group', 'octopus_ai_brand_name', 'sanitize_text_field');
     register_setting('octopus_ai_settings_group', 'octopus_ai_logo_url', 'esc_url_raw');
+    register_setting('octopus_ai_settings_group', 'octopus_ai_handoff_url_nl', 'octopus_ai_sanitize_manual_url');
+    register_setting('octopus_ai_settings_group', 'octopus_ai_handoff_url_fr', 'octopus_ai_sanitize_manual_url');
     register_setting('octopus_ai_settings_group', 'octopus_ai_welcome_message_nl', 'sanitize_textarea_field');
     register_setting('octopus_ai_settings_group', 'octopus_ai_welcome_message_fr', 'sanitize_textarea_field');
     register_setting('octopus_ai_settings_group', 'octopus_ai_display_mode', 'sanitize_text_field');
@@ -128,6 +131,12 @@ function octopus_ai_sanitize_render_mode($value) {
     return $value;
 }
 
+function octopus_ai_sanitize_confidence_threshold($value) {
+    $threshold = is_numeric($value) ? (float) $value : 55.0;
+    $threshold = max(0.0, min(100.0, $threshold));
+    return round($threshold, 2);
+}
+
 function octopus_ai_sanitize_manual_url($value) {
     $value = trim((string) $value);
     if ($value === '') {
@@ -193,6 +202,73 @@ function octopus_ai_pdf_admin_redirect(array $params = array()) {
     exit;
 }
 
+function octopus_ai_pdf_filename_to_slug($filename) {
+    $filename = sanitize_file_name((string) basename((string) $filename));
+    $base = (string) pathinfo($filename, PATHINFO_FILENAME);
+    if ($base === '') {
+        $base = (string) $filename;
+    }
+
+    $slug = sanitize_title($base);
+    if ($slug === '') {
+        $slug = 'pdf-' . substr(md5((string) $filename), 0, 8);
+    }
+
+    return $slug;
+}
+
+if (!function_exists('octopus_ai_get_chunk_json_encode_flags')) {
+    function octopus_ai_get_chunk_json_encode_flags() {
+        $flags = JSON_UNESCAPED_UNICODE;
+        $flags = (int) apply_filters('octopus_ai_chunk_json_encode_flags', $flags);
+        return $flags > 0 ? $flags : JSON_UNESCAPED_UNICODE;
+    }
+}
+
+if (!function_exists('octopus_ai_get_pdf_queue_batch_size')) {
+    function octopus_ai_get_pdf_queue_batch_size($queue_size = 0) {
+        $mb = defined('MB_IN_BYTES') ? (int) MB_IN_BYTES : (1024 * 1024);
+        $memory_limit = function_exists('octopus_ai_get_memory_limit_bytes')
+            ? (int) octopus_ai_get_memory_limit_bytes()
+            : 0;
+
+        $batch = 4;
+        if ($memory_limit > 0 && $memory_limit < 256 * $mb) {
+            $batch = 2;
+        } elseif ($memory_limit >= 768 * $mb) {
+            $batch = 8;
+        } elseif ($memory_limit >= 512 * $mb) {
+            $batch = 6;
+        }
+
+        $queue_size = max(0, (int) $queue_size);
+        if ($queue_size >= 25) {
+            $batch += 2;
+        } elseif ($queue_size >= 10) {
+            $batch += 1;
+        }
+
+        $batch = (int) apply_filters('octopus_ai_pdf_queue_batch_size', $batch, $queue_size, $memory_limit);
+        return max(1, min(12, $batch));
+    }
+}
+
+if (!function_exists('octopus_ai_get_pdf_queue_delay_seconds')) {
+    function octopus_ai_get_pdf_queue_delay_seconds($context = 'default') {
+        $context = sanitize_key((string) $context);
+        $delay_map = array(
+            'enqueue' => 2,
+            'resume' => 2,
+            'locked' => 8,
+            'missing_dependency' => 25,
+            'next_batch' => 3,
+        );
+        $delay = isset($delay_map[$context]) ? (int) $delay_map[$context] : 5;
+        $delay = (int) apply_filters('octopus_ai_pdf_queue_delay_seconds', $delay, $context);
+        return max(1, $delay);
+    }
+}
+
 function octopus_ai_get_exportable_option_names() {
     return array(
         'octopus_ai_model',
@@ -201,9 +277,12 @@ function octopus_ai_get_exportable_option_names() {
         'octopus_ai_header_text_color',
         'octopus_ai_test_mode',
         'octopus_ai_fallback',
+        'octopus_ai_confidence_threshold',
         'octopus_ai_primary_color',
         'octopus_ai_brand_name',
         'octopus_ai_logo_url',
+        'octopus_ai_handoff_url_nl',
+        'octopus_ai_handoff_url_fr',
         'octopus_ai_welcome_message_nl',
         'octopus_ai_welcome_message_fr',
         'octopus_ai_display_mode',
@@ -531,7 +610,7 @@ function octopus_ai_enqueue_pdf_jobs(array $file_paths) {
     ), false);
 
     if (!wp_next_scheduled('octopus_ai_process_pdf_queue')) {
-        wp_schedule_single_event(time() + 10, 'octopus_ai_process_pdf_queue');
+        wp_schedule_single_event(time() + octopus_ai_get_pdf_queue_delay_seconds('enqueue'), 'octopus_ai_process_pdf_queue');
     }
 
     return count($combined);
@@ -548,7 +627,7 @@ function octopus_ai_maybe_schedule_pdf_queue() {
     }
 
     if (!wp_next_scheduled('octopus_ai_process_pdf_queue')) {
-        wp_schedule_single_event(time() + 5, 'octopus_ai_process_pdf_queue');
+        wp_schedule_single_event(time() + octopus_ai_get_pdf_queue_delay_seconds('resume'), 'octopus_ai_process_pdf_queue');
     }
 }
 
@@ -556,7 +635,7 @@ function octopus_ai_process_pdf_queue() {
     $lock_key = 'octopus_ai_pdf_queue_lock';
     if (get_transient($lock_key)) {
         if (!wp_next_scheduled('octopus_ai_process_pdf_queue')) {
-            wp_schedule_single_event(time() + 20, 'octopus_ai_process_pdf_queue');
+            wp_schedule_single_event(time() + octopus_ai_get_pdf_queue_delay_seconds('locked'), 'octopus_ai_process_pdf_queue');
         }
         return;
     }
@@ -564,6 +643,13 @@ function octopus_ai_process_pdf_queue() {
     set_transient($lock_key, 1, 3 * MINUTE_IN_SECONDS);
 
     try {
+        if (function_exists('wp_raise_memory_limit')) {
+            wp_raise_memory_limit('admin');
+        }
+        if (function_exists('set_time_limit')) {
+            @set_time_limit(60);
+        }
+
         $queue = octopus_ai_get_pdf_queue();
         if (empty($queue)) {
             delete_option('octopus_ai_pdf_queue_status');
@@ -580,7 +666,7 @@ function octopus_ai_process_pdf_queue() {
         if (!class_exists(Chunker::class)) {
             error_log('[Octopus AI] Chunker class ontbreekt, PDF queue kan niet verwerkt worden.');
             if (!wp_next_scheduled('octopus_ai_process_pdf_queue')) {
-                wp_schedule_single_event(time() + 60, 'octopus_ai_process_pdf_queue');
+                wp_schedule_single_event(time() + octopus_ai_get_pdf_queue_delay_seconds('missing_dependency'), 'octopus_ai_process_pdf_queue');
             }
             return;
         }
@@ -591,7 +677,7 @@ function octopus_ai_process_pdf_queue() {
             wp_mkdir_p($chunks_dir);
         }
 
-        $batch_size = 2;
+        $batch_size = octopus_ai_get_pdf_queue_batch_size(count($queue));
         $batch = array_slice($queue, 0, $batch_size);
         $remaining = array_slice($queue, $batch_size);
         octopus_ai_set_pdf_queue($remaining);
@@ -609,12 +695,9 @@ function octopus_ai_process_pdf_queue() {
             }
 
             $filename = sanitize_file_name((string) basename($file_path));
-            $slug = sanitize_title((string) basename($filename, '.pdf'));
-            if ($slug === '') {
-                $slug = 'pdf-' . substr(md5($filename), 0, 8);
-            }
+            $slug = octopus_ai_pdf_filename_to_slug($filename);
 
-            $file_url = trailingslashit($upload_dir['baseurl']) . 'octopus-chatbot/' . $filename;
+            $file_url = trailingslashit($upload_dir['baseurl']) . 'octopus-chatbot/' . rawurlencode($filename);
 
             try {
                 $chunker = new Chunker();
@@ -625,16 +708,58 @@ function octopus_ai_process_pdf_queue() {
 
                 if (empty($chunks)) {
                     $failed_now++;
+                    $chunker_reason = '';
+                    if (method_exists($chunker, 'getLastError')) {
+                        $chunker_reason = trim((string) $chunker->getLastError());
+                    }
+                    if ($chunker_reason === '') {
+                        $chunker_reason = 'Geen bruikbare tekst gevonden (mogelijk gescande PDF zonder OCR-textlaag).';
+                    }
+
                     $last_error_now = 'Geen chunks gemaakt voor PDF: ' . $filename;
-                    error_log('[Octopus AI] Geen chunks gemaakt voor PDF: ' . $filename);
+                    if ($chunker_reason !== '') {
+                        $last_error_now .= ' (' . $chunker_reason . ')';
+                    }
+
+                    error_log('[Octopus AI] ' . $last_error_now);
                     continue;
                 }
 
-                foreach (glob($chunks_dir . $slug . '_chunk_*.json') as $old_file) {
-                    unlink($old_file);
+                $cleanup_slugs = array($slug);
+                if (preg_match('/^(.*)-([1-9]\d?)$/', $slug, $matches) && !empty($matches[1])) {
+                    $cleanup_slugs[] = (string) $matches[1];
+                }
+
+                $variant_pattern = '/^(' . preg_quote($slug, '/') . '-([1-9]\d?))_chunk_\d+\.json$/';
+                foreach (glob($chunks_dir . $slug . '-*_chunk_*.json') as $variant_chunk_file) {
+                    $variant_name = (string) basename((string) $variant_chunk_file);
+                    if (preg_match($variant_pattern, $variant_name, $variant_match) && !empty($variant_match[1])) {
+                        $cleanup_slugs[] = (string) $variant_match[1];
+                    }
+                }
+
+                if (preg_match('/^(.*)-([1-9]\d?)$/', $slug, $base_match) && !empty($base_match[1])) {
+                    $base_slug = (string) $base_match[1];
+                    $base_variant_pattern = '/^(' . preg_quote($base_slug, '/') . '-([1-9]\d?))_chunk_\d+\.json$/';
+                    foreach (glob($chunks_dir . $base_slug . '-*_chunk_*.json') as $base_variant_chunk_file) {
+                        $variant_name = (string) basename((string) $base_variant_chunk_file);
+                        if (preg_match($base_variant_pattern, $variant_name, $variant_match) && !empty($variant_match[1])) {
+                            $cleanup_slugs[] = (string) $variant_match[1];
+                        }
+                    }
+                }
+
+                $cleanup_slugs = array_values(array_unique(array_filter($cleanup_slugs)));
+
+                foreach ($cleanup_slugs as $cleanup_slug) {
+                    foreach (glob($chunks_dir . $cleanup_slug . '_chunk_*.json') as $old_file) {
+                        unlink($old_file);
+                    }
                 }
 
                 $chunk_index = 0;
+                $total_chunk_count = count($chunks);
+                $chunk_json_flags = octopus_ai_get_chunk_json_encode_flags();
                 foreach ($chunks as $chunk) {
                     $chunk_index++;
                     $meta = isset($chunk['metadata']) && is_array($chunk['metadata']) ? $chunk['metadata'] : array();
@@ -648,9 +773,15 @@ function octopus_ai_process_pdf_queue() {
                             'section_title' => $meta['section_title'] ?? '',
                             'source_url' => $meta['source_url'] ?? '',
                             'manual_url' => $meta['manual_url'] ?? '',
+                            'source_type' => $meta['source_type'] ?? 'pdf',
+                            'chunk_index' => isset($meta['chunk_index']) ? (int) $meta['chunk_index'] : $chunk_index,
+                            'total_chunks' => isset($meta['total_chunks']) ? (int) $meta['total_chunks'] : $total_chunk_count,
+                            'index_terms' => isset($meta['index_terms']) && is_array($meta['index_terms'])
+                                ? array_values(array_filter(array_map('strval', $meta['index_terms'])))
+                                : array(),
                         ),
                     );
-                    file_put_contents($chunk_file, wp_json_encode($data, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT));
+                    file_put_contents($chunk_file, wp_json_encode($data, $chunk_json_flags));
                 }
 
                 $processed_files_now++;
@@ -681,7 +812,7 @@ function octopus_ai_process_pdf_queue() {
         update_option('octopus_ai_pdf_queue_status', $status, false);
 
         if (!empty($remaining) && !wp_next_scheduled('octopus_ai_process_pdf_queue')) {
-            wp_schedule_single_event(time() + 15, 'octopus_ai_process_pdf_queue');
+            wp_schedule_single_event(time() + octopus_ai_get_pdf_queue_delay_seconds('next_batch'), 'octopus_ai_process_pdf_queue');
         }
     } finally {
         delete_transient($lock_key);
@@ -869,12 +1000,20 @@ function octopus_ai_download_remote_pdf_to_uploads($url) {
     $remote_path = (string) wp_parse_url($validated_url, PHP_URL_PATH);
     $decoded_basename = rawurldecode((string) basename($remote_path));
     $filename = sanitize_file_name($decoded_basename);
-    if ($filename === '' || !preg_match('/\.pdf$/i', $filename)) {
+    $ext = strtolower((string) pathinfo($filename, PATHINFO_EXTENSION));
+    if ($filename === '' || $ext !== 'pdf') {
         $filename = 'remote-' . substr(md5($validated_url), 0, 12) . '.pdf';
     }
 
-    $unique_filename = wp_unique_filename($upload_path, $filename);
-    $destination = $upload_path . $unique_filename;
+    $base_name = sanitize_file_name((string) pathinfo($filename, PATHINFO_FILENAME));
+    if ($base_name === '') {
+        $base_name = 'remote-' . substr(md5($validated_url), 0, 12);
+    }
+    $filename = $base_name . '.pdf';
+    $destination = $upload_path . $filename;
+    if (file_exists($destination)) {
+        @unlink($destination);
+    }
 
     $moved = @rename($temp_file, $destination);
     if (!$moved) {
@@ -889,7 +1028,7 @@ function octopus_ai_download_remote_pdf_to_uploads($url) {
 
     return array(
         'path' => wp_normalize_path($destination),
-        'filename' => $unique_filename,
+        'filename' => $filename,
         'size' => (int) @filesize($destination),
     );
 }
@@ -917,11 +1056,26 @@ function octopus_ai_handle_pdf_upload() {
     $queued_files = array();
 
     foreach ($files['name'] as $index => $name) {
-        if ($files['error'][$index] === UPLOAD_ERR_OK) {
-            $filename = sanitize_file_name($name);
-            $filepath = $upload_path . $filename;
+        $error_code = isset($files['error'][$index]) ? (int) $files['error'][$index] : UPLOAD_ERR_NO_FILE;
+        if ($error_code === UPLOAD_ERR_OK) {
+            $original = sanitize_file_name((string) $name);
+            $ext = strtolower((string) pathinfo($original, PATHINFO_EXTENSION));
+            if ($ext !== 'pdf') {
+                continue;
+            }
 
-            if (move_uploaded_file($files['tmp_name'][$index], $filepath)) {
+            $base_name = sanitize_file_name((string) pathinfo($original, PATHINFO_FILENAME));
+            if ($base_name === '') {
+                $base_name = 'upload-' . substr(md5((string) $name . '|' . (string) $index), 0, 8);
+            }
+
+            $filename = $base_name . '.pdf';
+            $filepath = $upload_path . $filename;
+            if (file_exists($filepath)) {
+                @unlink($filepath);
+            }
+
+            if (move_uploaded_file($files['tmp_name'][$index], $filepath) || @copy($files['tmp_name'][$index], $filepath)) {
                 $queued_files[] = wp_normalize_path($filepath);
             }
         }
@@ -991,9 +1145,9 @@ function octopus_ai_handle_delete_file() {
     $chunks_dir = trailingslashit($upload_dir['basedir']) . 'octopus-ai-chunks/';
 
     if (file_exists($file_path)) {
-        $ext = pathinfo($safe_file, PATHINFO_EXTENSION);
+        $ext = strtolower((string) pathinfo($safe_file, PATHINFO_EXTENSION));
         if ($ext === 'pdf') {
-            $slug = basename($safe_file, '.pdf');
+            $slug = octopus_ai_pdf_filename_to_slug($safe_file);
 
             foreach (glob($chunks_dir . $slug . '_chunk_*.json') as $chunk) {
 
@@ -1008,6 +1162,13 @@ function octopus_ai_handle_delete_file() {
         }
 
         unlink($file_path);
+        if ($ext === 'xml' && function_exists('octopus_ai_unregister_sitemap_source')) {
+            octopus_ai_unregister_sitemap_source($safe_file);
+            $saved_sitemap_url = esc_url_raw((string) get_option('octopus_ai_sitemap_url', ''));
+            if ($saved_sitemap_url !== '' && $safe_file === ('remote_' . md5($saved_sitemap_url) . '.xml')) {
+                delete_option('octopus_ai_sitemap_url');
+            }
+        }
         wp_redirect(add_query_arg('delete', 'success', admin_url('admin.php?page=octopus-ai-chatbot')));
     } else {
         wp_redirect(add_query_arg('delete', 'error', admin_url('admin.php?page=octopus-ai-chatbot')));
@@ -1036,9 +1197,9 @@ function octopus_ai_handle_bulk_delete() {
         $safe_name = basename($filename);
         $file_path = $upload_path . $safe_name;
         if (file_exists($file_path)) {
-            $ext = pathinfo($safe_name, PATHINFO_EXTENSION);
+            $ext = strtolower((string) pathinfo($safe_name, PATHINFO_EXTENSION));
             if ($ext === 'pdf') {
-                $slug = basename($safe_name, '.pdf');
+                $slug = octopus_ai_pdf_filename_to_slug($safe_name);
 
                 foreach (glob($chunks_dir . $slug . '_chunk_*.json') as $chunk) {
 
@@ -1053,6 +1214,13 @@ function octopus_ai_handle_bulk_delete() {
             }
 
             unlink($file_path);
+            if ($ext === 'xml' && function_exists('octopus_ai_unregister_sitemap_source')) {
+                octopus_ai_unregister_sitemap_source($safe_name);
+                $saved_sitemap_url = esc_url_raw((string) get_option('octopus_ai_sitemap_url', ''));
+                if ($saved_sitemap_url !== '' && $safe_name === ('remote_' . md5($saved_sitemap_url) . '.xml')) {
+                    delete_option('octopus_ai_sitemap_url');
+                }
+            }
             $deleted_count++;
         }
     }
@@ -1089,9 +1257,13 @@ function octopus_ai_settings_page() {
     $manual_base_fr = get_option('octopus_ai_manual_base_url_fr', '');
     $manual_priority_nl = get_option('octopus_ai_manual_priority_urls_nl', '');
     $manual_priority_fr = get_option('octopus_ai_manual_priority_urls_fr', '');
+    $confidence_threshold = get_option('octopus_ai_confidence_threshold', 55);
+    $handoff_url_nl = get_option('octopus_ai_handoff_url_nl', '');
+    $handoff_url_fr = get_option('octopus_ai_handoff_url_fr', '');
     $welcome_message_nl = get_option('octopus_ai_welcome_message_nl', '');
     $welcome_message_fr = get_option('octopus_ai_welcome_message_fr', '');
     $saved_sitemap_url = get_option('octopus_ai_sitemap_url', '');
+    $sitemap_sources = function_exists('octopus_ai_get_sitemap_sources') ? octopus_ai_get_sitemap_sources() : array();
     $sitemap_queue_status = get_option('octopus_ai_sitemap_queue_status', array());
     $pdf_queue_status = get_option('octopus_ai_pdf_queue_status', array());
     if (!is_array($sitemap_queue_status)) {
@@ -1117,7 +1289,13 @@ function octopus_ai_settings_page() {
 
     $parser = class_exists(SitemapParser::class) ? new SitemapParser() : null;
     $chunk_dir_status = trailingslashit($upload_dir['basedir']) . 'octopus-ai-chunks/';
-    $pdf_files = file_exists($upload_path) ? glob($upload_path . '*.pdf') : array();
+    $pdf_files = array();
+    if (file_exists($upload_path)) {
+        $pdf_files = array_merge(
+            glob($upload_path . '*.pdf') ?: array(),
+            glob($upload_path . '*.PDF') ?: array()
+        );
+    }
     $xml_files = file_exists($upload_path) ? glob($upload_path . '*.xml') : array();
     $pdf_chunk_files = file_exists($chunk_dir_status) ? glob($chunk_dir_status . '*_chunk_*.json') : array();
     $sitemap_chunk_files = file_exists($chunk_dir_status) ? glob($chunk_dir_status . 'sitemap_*.json') : array();
@@ -1126,6 +1304,9 @@ function octopus_ai_settings_page() {
     $xml_files = is_array($xml_files) ? $xml_files : array();
     $pdf_chunk_files = is_array($pdf_chunk_files) ? $pdf_chunk_files : array();
     $sitemap_chunk_files = is_array($sitemap_chunk_files) ? $sitemap_chunk_files : array();
+    $pdf_chunk_files = array_values(array_filter($pdf_chunk_files, static function ($file) {
+        return strpos((string) basename((string) $file), 'sitemap_') !== 0;
+    }));
     $all_chunk_files = array_values(array_merge($pdf_chunk_files, $sitemap_chunk_files));
 
     $chunked_pdf_slugs = array();
@@ -1139,7 +1320,7 @@ function octopus_ai_settings_page() {
 
     $pdf_file_slugs = array();
     foreach ($pdf_files as $pdf_file) {
-        $pdf_file_slugs[] = (string) basename((string) $pdf_file, '.pdf');
+        $pdf_file_slugs[] = octopus_ai_pdf_filename_to_slug((string) basename((string) $pdf_file));
     }
     $pdf_file_slugs = array_values(array_unique($pdf_file_slugs));
 
@@ -1230,6 +1411,16 @@ function octopus_ai_settings_page() {
 
         <?php if (isset($_GET['sitemap_saved']) && intval($_GET['sitemap_saved']) === 1 && $saved_sitemap_url !== '') : ?>
             <div class="notice notice-info is-dismissible"><p>Actieve sitemapbron: <code><?php echo esc_html($saved_sitemap_url); ?></code></p></div>
+        <?php endif; ?>
+
+        <?php if (isset($_GET['sitemap_refreshed']) && intval($_GET['sitemap_refreshed']) === 1) : ?>
+            <?php $refreshed_file = isset($_GET['sitemap_file']) ? sanitize_file_name((string) wp_unslash($_GET['sitemap_file'])) : ''; ?>
+            <div class="notice notice-success is-dismissible">
+                <p>
+                    Sitemap bijgewerkt<?php echo $refreshed_file !== '' ? ': <code>' . esc_html($refreshed_file) . '</code>' : ''; ?>.
+                    Nieuwe of gewijzigde pagina's staan in de achtergrondwachtrij.
+                </p>
+            </div>
         <?php endif; ?>
 
         <?php if (!empty($sitemap_queue_status) && isset($sitemap_queue_status['remaining']) && intval($sitemap_queue_status['remaining']) > 0) : ?>
@@ -1427,9 +1618,9 @@ function octopus_ai_settings_page() {
                 ],
                 'sitemap_online' => [
                     'title'       => 'Online sitemap gebruiken',
-                    'description' => 'Zoek of bewaar een sitemap-URL en laat Octopus de inhoud crawlen.',
+                    'description' => 'Zoek of bewaar een sitemap-URL en laat Octopus inhoud + menu-items (ook dropdowns) crawlen.',
                     'badge'       => 'Automatisch',
-                    'cta'         => 'Gebruik uitsluitend de gevonden sitemap.',
+                    'cta'         => 'Gebruik uitsluitend de gevonden sitemapbron.',
                 ],
                 'live_manual' => [
                     'title'       => 'Live handleiding',
@@ -1552,6 +1743,27 @@ function octopus_ai_settings_page() {
             <table class="form-table">
                 <tr><th>Tone of Voice</th><td><textarea name="octopus_ai_tone" rows="3" style="width: 400px;"><?php echo esc_textarea(get_option('octopus_ai_tone')); ?></textarea></td></tr>
                 <tr><th>Fallback tekst</th><td><input type="text" name="octopus_ai_fallback" value="<?php echo esc_attr(get_option('octopus_ai_fallback')); ?>" style="width: 400px;" /></td></tr>
+                <tr>
+                    <th>Confidence drempel (%)</th>
+                    <td>
+                        <input type="number" name="octopus_ai_confidence_threshold" min="0" max="100" step="1" value="<?php echo esc_attr($confidence_threshold); ?>" style="width: 120px;" />
+                        <p class="description">Bij lagere confidence geeft de chatbot geen gokantwoord, maar een veilige fallback met handleidinglinks.</p>
+                    </td>
+                </tr>
+                <tr>
+                    <th>Support link NL</th>
+                    <td>
+                        <input type="url" name="octopus_ai_handoff_url_nl" value="<?php echo esc_attr($handoff_url_nl); ?>" placeholder="https://..." style="width: 400px;" />
+                        <p class="description">Optioneel: wordt getoond wanneer de chatbot geen betrouwbare oplossing heeft (Nederlands).</p>
+                    </td>
+                </tr>
+                <tr>
+                    <th>Support link FR</th>
+                    <td>
+                        <input type="url" name="octopus_ai_handoff_url_fr" value="<?php echo esc_attr($handoff_url_fr); ?>" placeholder="https://..." style="width: 400px;" />
+                        <p class="description">Optioneel: wordt getoond wanneer de chatbot geen betrouwbare oplossing heeft (Frans).</p>
+                    </td>
+                </tr>
                 <tr><th>Verwelkomingstekst NL</th><td><textarea name="octopus_ai_welcome_message_nl" rows="2" style="width: 400px;"><?php echo esc_textarea($welcome_message_nl); ?></textarea></td></tr>
                 <tr><th>Verwelkomingstekst FR</th><td><textarea name="octopus_ai_welcome_message_fr" rows="2" style="width: 400px;"><?php echo esc_textarea($welcome_message_fr); ?></textarea></td></tr>
                 <tr><th>Merknaam</th><td><input type="text" name="octopus_ai_brand_name" value="<?php echo esc_attr(get_option('octopus_ai_brand_name')); ?>" style="width: 400px;" /></td></tr>
@@ -1722,7 +1934,7 @@ function octopus_ai_settings_page() {
             <div class="source-mode-panel <?php echo $source_strategy === 'sitemap_online' ? 'is-active' : ''; ?>" data-mode="sitemap_online">
                 <div class="upload-box">
                     <h3>Sitemap via URL</h3>
-                    <p class="section-description">Geef een sitemap-URL of webpagina-URL op. De plugin zoekt de sitemap, slaat die lokaal op en zet URL's in een achtergrondwachtrij voor chunking.</p>
+                    <p class="section-description">Geef een sitemap-URL of webpagina-URL op. De plugin zoekt de sitemap, slaat die lokaal op en zet URL's in een achtergrondwachtrij voor chunking. Tijdens verwerking worden ook navigatie- en dropdown-termen op die pagina's mee geindexeerd.</p>
                     <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
                         <?php wp_nonce_field('octopus_ai_import_sitemap_url', 'octopus_ai_sitemap_url_nonce'); ?>
                         <input type="hidden" name="action" value="octopus_ai_import_sitemap_url">
@@ -1731,6 +1943,12 @@ function octopus_ai_settings_page() {
                     </form>
                     <?php if ($saved_sitemap_url !== '') : ?>
                         <p class="description">Actieve sitemapbron: <code><?php echo esc_html($saved_sitemap_url); ?></code></p>
+                        <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" style="margin-top:10px;">
+                            <?php wp_nonce_field('octopus_ai_refresh_sitemap', 'octopus_ai_refresh_sitemap_nonce'); ?>
+                            <input type="hidden" name="action" value="octopus_ai_refresh_sitemap">
+                            <input type="hidden" name="sitemap_file" value="<?php echo esc_attr('remote_' . md5($saved_sitemap_url) . '.xml'); ?>">
+                            <?php submit_button('Werk actieve sitemap nu bij', 'secondary', '', false); ?>
+                        </form>
                     <?php endif; ?>
                 </div>
 
@@ -1819,12 +2037,36 @@ function octopus_ai_settings_page() {
                         <input type="hidden" name="action" value="octopus_ai_delete_sitemaps">
                         <ul class="octopus-list-box">
                             <?php foreach ($sitemaps as $file) :
-                                $filename = basename($file); ?>
+                                $filename = basename($file);
+                                $source_entry = isset($sitemap_sources[$filename]) && is_array($sitemap_sources[$filename]) ? $sitemap_sources[$filename] : array();
+                                $source_url = esc_url_raw((string) ($source_entry['source_url'] ?? ''));
+                                if ($source_url === '' && function_exists('octopus_ai_resolve_sitemap_source_url')) {
+                                    $source_url = octopus_ai_resolve_sitemap_source_url($filename, $sitemap_sources);
+                                }
+                                $updated_at = sanitize_text_field((string) ($source_entry['updated_at'] ?? ''));
+                                $refresh_url = wp_nonce_url(
+                                    admin_url('admin-post.php?action=octopus_ai_refresh_sitemap&sitemap_file=' . rawurlencode($filename)),
+                                    'octopus_ai_refresh_sitemap'
+                                );
+                                ?>
                                 <li>
                                     <label>
                                         <input type="checkbox" name="sitemap_files[]" value="<?php echo esc_attr($filename); ?>">
                                         <a href="<?php echo esc_url($sitemap_url_base . $filename); ?>" target="_blank"><?php echo esc_html($filename); ?></a>
                                     </label>
+                                    <div class="description" style="margin:6px 0 0 22px;">
+                                        <?php if ($source_url !== '') : ?>
+                                            <span>Bron-URL: <code><?php echo esc_html($source_url); ?></code></span>
+                                            <?php if ($updated_at !== '') : ?>
+                                                <br><span>Laatst gesynchroniseerd: <?php echo esc_html($updated_at); ?></span>
+                                            <?php endif; ?>
+                                            <p style="margin:8px 0 0;">
+                                                <a href="<?php echo esc_url($refresh_url); ?>" class="button button-secondary">Werk deze sitemap bij</a>
+                                            </p>
+                                        <?php else : ?>
+                                            <span>Geen bron-URL gekend. Importeer deze sitemap opnieuw via URL om automatische updates te activeren.</span>
+                                        <?php endif; ?>
+                                    </div>
                                 </li>
                             <?php endforeach; ?>
                         </ul>

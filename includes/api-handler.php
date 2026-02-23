@@ -763,6 +763,63 @@ if (!function_exists('octopus_ai_select_topic_reference_links')) {
     }
 }
 
+if (!function_exists('octopus_ai_detect_topic_for_retrieval')) {
+    function octopus_ai_detect_topic_for_retrieval($message)
+    {
+        $normalized = octopus_ai_normalize_scope_text($message);
+        if ($normalized === '') {
+            return '';
+        }
+
+        $topic_terms_map = octopus_ai_get_topic_terms_map();
+        if (!is_array($topic_terms_map) || empty($topic_terms_map)) {
+            return '';
+        }
+
+        $best_topic = '';
+        $best_score = 0.0;
+        $second_score = 0.0;
+
+        foreach ($topic_terms_map as $topic_key => $terms) {
+            $topic_key = sanitize_key((string) $topic_key);
+            if ($topic_key === '' || !is_array($terms) || empty($terms)) {
+                continue;
+            }
+
+            $score = 0.0;
+            foreach ($terms as $term) {
+                $term = octopus_ai_normalize_scope_text($term);
+                if ($term === '') {
+                    continue;
+                }
+
+                if (strpos($normalized, $term) === false) {
+                    continue;
+                }
+
+                $score += 1.0;
+                if (strlen($term) >= 8) {
+                    $score += 0.35;
+                }
+            }
+
+            if ($score > $best_score) {
+                $second_score = $best_score;
+                $best_score = $score;
+                $best_topic = $topic_key;
+            } elseif ($score > $second_score) {
+                $second_score = $score;
+            }
+        }
+
+        if ($best_topic === '' || $best_score < 2.0 || $best_score <= $second_score) {
+            return '';
+        }
+
+        return $best_topic;
+    }
+}
+
 if (!function_exists('octopus_ai_is_3d_printing_question')) {
     function octopus_ai_is_3d_printing_question($message)
     {
@@ -833,6 +890,136 @@ if (!function_exists('octopus_ai_get_3d_printing_easter_egg_answer')) {
     }
 }
 
+if (!function_exists('octopus_ai_select_top_reference_links')) {
+    function octopus_ai_select_top_reference_links(array $reference_candidates, $lang = 'NL', $limit = 3)
+    {
+        $limit = max(1, min(10, (int) $limit));
+        if (empty($reference_candidates)) {
+            return [];
+        }
+
+        usort(
+            $reference_candidates,
+            static function ($a, $b) {
+                $scoreA = isset($a['score']) ? (float) $a['score'] : 0.0;
+                $scoreB = isset($b['score']) ? (float) $b['score'] : 0.0;
+                if ($scoreA === $scoreB) {
+                    return 0;
+                }
+                return ($scoreA < $scoreB) ? 1 : -1;
+            }
+        );
+
+        $seen_urls = [];
+        $selected = [];
+        foreach ($reference_candidates as $candidate) {
+            if (!is_array($candidate)) {
+                continue;
+            }
+
+            $url = esc_url_raw((string) ($candidate['url'] ?? ''));
+            if ($url === '' || isset($seen_urls[$url])) {
+                continue;
+            }
+
+            $seen_urls[$url] = true;
+            $title = sanitize_text_field((string) ($candidate['title'] ?? ''));
+            if ($title === '') {
+                $title = strtoupper((string) $lang) === 'FR'
+                    ? 'Voir dans le manuel'
+                    : 'Bekijk dit in de handleiding';
+            }
+
+            $selected[] = [
+                'title' => $title,
+                'url' => $url,
+                'score' => isset($candidate['score']) ? (float) $candidate['score'] : 0.0,
+            ];
+
+            if (count($selected) >= $limit) {
+                break;
+            }
+        }
+
+        return $selected;
+    }
+}
+
+if (!function_exists('octopus_ai_get_confidence_threshold')) {
+    function octopus_ai_get_confidence_threshold()
+    {
+        $raw = get_option('octopus_ai_confidence_threshold', 55);
+        $percent = is_numeric($raw) ? (float) $raw : 55.0;
+        $percent = max(0.0, min(100.0, $percent));
+        return $percent / 100.0;
+    }
+}
+
+if (!function_exists('octopus_ai_get_handoff_url')) {
+    function octopus_ai_get_handoff_url($lang = 'NL')
+    {
+        $lang = strtoupper((string) $lang) === 'FR' ? 'FR' : 'NL';
+        $option_key = $lang === 'FR' ? 'octopus_ai_handoff_url_fr' : 'octopus_ai_handoff_url_nl';
+        $url = esc_url_raw((string) get_option($option_key, ''));
+
+        if ($url === '') {
+            return '';
+        }
+
+        if (function_exists('wp_http_validate_url') && !wp_http_validate_url($url)) {
+            return '';
+        }
+
+        return $url;
+    }
+}
+
+if (!function_exists('octopus_ai_calculate_answer_confidence')) {
+    function octopus_ai_calculate_answer_confidence(array $signals = [])
+    {
+        $context = (string) ($signals['context'] ?? '');
+        $live_context = (string) ($signals['live_context'] ?? '');
+        $metadata_chunks = isset($signals['metadata_chunks']) && is_array($signals['metadata_chunks'])
+            ? $signals['metadata_chunks']
+            : [];
+        $reference_count = max(0, (int) ($signals['reference_count'] ?? 0));
+        $topic_selected = !empty($signals['topic_selected']);
+
+        $best_signal = max(
+            0.0,
+            (float) ($signals['best_metadata_score'] ?? 0.0),
+            (float) ($signals['best_live_score'] ?? 0.0)
+        );
+
+        $total_context_length = strlen(trim($context)) + strlen(trim($live_context));
+        $context_norm = min(1.0, $total_context_length / 9000.0);
+        $metadata_norm = min(1.0, count($metadata_chunks) / 5.0);
+        $reference_norm = min(1.0, $reference_count / 3.0);
+
+        $signal_norm = 0.0;
+        if ($best_signal >= 8.0) {
+            $signal_norm = 1.0;
+        } elseif ($best_signal >= 5.0) {
+            $signal_norm = 0.75;
+        } elseif ($best_signal >= 2.5) {
+            $signal_norm = 0.5;
+        } elseif ($best_signal > 0.0) {
+            $signal_norm = 0.2;
+        }
+
+        $score = 0.05;
+        $score += 0.4 * $context_norm;
+        $score += 0.3 * $signal_norm;
+        $score += 0.15 * $metadata_norm;
+        $score += 0.1 * $reference_norm;
+        if ($topic_selected) {
+            $score += 0.05;
+        }
+
+        return max(0.0, min(1.0, $score));
+    }
+}
+
 if (!function_exists('octopus_ai_get_no_solution_message')) {
     function octopus_ai_get_no_solution_message($lang = 'NL', $fallback = '')
     {
@@ -852,11 +1039,34 @@ if (!function_exists('octopus_ai_get_no_solution_message')) {
 }
 
 if (!function_exists('octopus_ai_build_no_solution_answer')) {
-    function octopus_ai_build_no_solution_answer($lang, $message, $fallback = '')
+    function octopus_ai_build_no_solution_answer($lang, $message, $fallback = '', array $options = [])
     {
         $lang = strtoupper((string) $lang) === 'FR' ? 'FR' : 'NL';
         $message = (string) $message;
         $answer = octopus_ai_get_no_solution_message($lang, $fallback);
+        $reference_candidates = isset($options['references']) && is_array($options['references'])
+            ? $options['references']
+            : [];
+        $reference_links = function_exists('octopus_ai_select_top_reference_links')
+            ? octopus_ai_select_top_reference_links($reference_candidates, $lang, 3)
+            : [];
+
+        if (!empty($reference_links)) {
+            $heading = ($lang === 'FR') ? 'Pages utiles' : 'Relevante pagina\'s';
+            $answer .= "\n\n{$heading}:\n";
+            foreach ($reference_links as $reference_link) {
+                $title = sanitize_text_field((string) ($reference_link['title'] ?? ''));
+                $url = esc_url_raw((string) ($reference_link['url'] ?? ''));
+                if ($url === '') {
+                    continue;
+                }
+                if ($title === '') {
+                    $title = ($lang === 'FR') ? 'Voir dans le manuel' : 'Bekijk dit in de handleiding';
+                }
+                $answer .= '- [' . $title . '](' . $url . ')' . "\n";
+            }
+            $answer = rtrim($answer);
+        }
 
         if (!function_exists('octopus_ai_extract_keyword')) {
             $keyword_helper = plugin_dir_path(__FILE__) . 'helpers/extract-keyword.php';
@@ -865,7 +1075,7 @@ if (!function_exists('octopus_ai_build_no_solution_answer')) {
             }
         }
 
-        if (function_exists('octopus_ai_extract_keyword')) {
+        if (empty($reference_links) && function_exists('octopus_ai_extract_keyword')) {
             $keyword = octopus_ai_extract_keyword($message);
             if ($keyword) {
                 $search_url = function_exists('octopus_ai_get_manual_search_url')
@@ -876,6 +1086,17 @@ if (!function_exists('octopus_ai_build_no_solution_answer')) {
                     : 'Bekijk mogelijke info in de handleiding';
                 $answer .= "\n\n[$link_text]($search_url)";
             }
+        }
+
+        $handoff_url = esc_url_raw((string) ($options['handoff_url'] ?? ''));
+        if ($handoff_url === '') {
+            $handoff_url = function_exists('octopus_ai_get_handoff_url')
+                ? octopus_ai_get_handoff_url($lang)
+                : '';
+        }
+        if ($handoff_url !== '') {
+            $handoff_label = ($lang === 'FR') ? 'Contacter le support' : 'Contacteer support';
+            $answer .= "\n\n[$handoff_label]($handoff_url)";
         }
 
         $answer = octopus_ai_apply_language_glossary($answer, $lang);
@@ -1486,6 +1707,13 @@ function octopus_ai_chatbot_callback($request)
     if (!in_array($topic, $allowed_topics, true)) {
         $topic = '';
     }
+    $retrieval_topic = $topic;
+    if ($retrieval_topic === '' && function_exists('octopus_ai_detect_topic_for_retrieval')) {
+        $detected_topic = sanitize_key((string) octopus_ai_detect_topic_for_retrieval($message));
+        if (in_array($detected_topic, $allowed_topics, true)) {
+            $retrieval_topic = $detected_topic;
+        }
+    }
 
     if ($message === '') {
         return new WP_Error('octopus_ai_empty_message', __('Leeg bericht ontvangen.', 'octopus-ai'), ['status' => 400]);
@@ -1675,31 +1903,99 @@ EOT;
     $reference_candidates = [];
 
     if (function_exists('octopus_ai_retrieve_relevant_chunks')) {
-        if ($use_local_chunks) {
-            $result = octopus_ai_retrieve_relevant_chunks($message, $topic);
-            $context = $result['context'] ?? '';
-
+        $extract_metadata_chunks = static function ($result) {
+            if (!is_array($result)) {
+                return [];
+            }
             if (isset($result['metadata']['chunks']) && is_array($result['metadata']['chunks'])) {
-                $metadata_chunks = $result['metadata']['chunks'];
-            } elseif (isset($result['metadatas']) && is_array($result['metadatas'])) {
-                $metadata_chunks = $result['metadatas'];
-            } elseif (isset($result['metas']) && is_array($result['metas'])) {
-                $metadata_chunks = $result['metas'];
+                return $result['metadata']['chunks'];
+            }
+            if (isset($result['metadatas']) && is_array($result['metadatas'])) {
+                return $result['metadatas'];
+            }
+            if (isset($result['metas']) && is_array($result['metas'])) {
+                return $result['metas'];
+            }
+            return [];
+        };
+
+        if ($use_local_chunks && $topic === '') {
+            $dual_topics = ['klantenportaal', 'boekhoudprogramma'];
+            if ($retrieval_topic !== '') {
+                $dual_topics = array_values(array_unique(array_merge([$retrieval_topic], $dual_topics)));
+            }
+            $context_parts = [];
+            $metadata_merged = [];
+
+            foreach ($dual_topics as $candidate_topic) {
+                $candidate_result = octopus_ai_retrieve_relevant_chunks($message, $candidate_topic);
+                $candidate_context = trim((string) ($candidate_result['context'] ?? ''));
+                if ($candidate_context !== '') {
+                    $context_parts[] = '[' . octopus_ai_get_topic_label($candidate_topic, $lang) . "]\n" . $candidate_context;
+                }
+
+                foreach ($extract_metadata_chunks($candidate_result) as $candidate_meta) {
+                    if (!is_array($candidate_meta)) {
+                        continue;
+                    }
+                    $candidate_meta['topic'] = $candidate_topic;
+                    $metadata_merged[] = $candidate_meta;
+                }
             }
 
+            if (!empty($context_parts)) {
+                $context = implode("\n\n", $context_parts);
+                if (function_exists('mb_substr')) {
+                    $context = (string) mb_substr($context, 0, 13000);
+                } else {
+                    $context = (string) substr($context, 0, 13000);
+                }
+            } else {
+                $fallback_result = octopus_ai_retrieve_relevant_chunks($message, '');
+                $context = (string) ($fallback_result['context'] ?? '');
+                $metadata_merged = $extract_metadata_chunks($fallback_result);
+            }
+
+            $metadata_chunks = $metadata_merged;
+            $metadata_chunks_for_live = $metadata_merged;
+
+            if (!empty($context) && strlen($context) > 20) {
+                $relevantFound = true;
+            }
+        } elseif ($use_local_chunks) {
+            $result = octopus_ai_retrieve_relevant_chunks($message, $topic);
+            $context = $result['context'] ?? '';
+            $metadata_chunks = $extract_metadata_chunks($result);
             $metadata_chunks_for_live = $metadata_chunks;
 
             if (!empty($context) && strlen($context) > 20) {
                 $relevantFound = true;
             }
         } else {
-            $result = octopus_ai_retrieve_relevant_chunks($message, $topic);
-            if (isset($result['metadata']['chunks']) && is_array($result['metadata']['chunks'])) {
-                $metadata_chunks_for_live = $result['metadata']['chunks'];
-            } elseif (isset($result['metadatas']) && is_array($result['metadatas'])) {
-                $metadata_chunks_for_live = $result['metadatas'];
-            } elseif (isset($result['metas']) && is_array($result['metas'])) {
-                $metadata_chunks_for_live = $result['metas'];
+            if ($topic === '') {
+                $dual_topics = ['klantenportaal', 'boekhoudprogramma'];
+                if ($retrieval_topic !== '') {
+                    $dual_topics = array_values(array_unique(array_merge([$retrieval_topic], $dual_topics)));
+                }
+                $metadata_merged = [];
+                foreach ($dual_topics as $candidate_topic) {
+                    $candidate_result = octopus_ai_retrieve_relevant_chunks($message, $candidate_topic);
+                    foreach ($extract_metadata_chunks($candidate_result) as $candidate_meta) {
+                        if (!is_array($candidate_meta)) {
+                            continue;
+                        }
+                        $candidate_meta['topic'] = $candidate_topic;
+                        $metadata_merged[] = $candidate_meta;
+                    }
+                }
+                if (empty($metadata_merged)) {
+                    $fallback_result = octopus_ai_retrieve_relevant_chunks($message, '');
+                    $metadata_merged = $extract_metadata_chunks($fallback_result);
+                }
+                $metadata_chunks_for_live = $metadata_merged;
+            } else {
+                $result = octopus_ai_retrieve_relevant_chunks($message, $topic);
+                $metadata_chunks_for_live = $extract_metadata_chunks($result);
             }
 
             if ($source_strategy !== 'live_manual') {
@@ -1759,10 +2055,28 @@ EOT;
 
     // ÃƒÂ¢Ã‚ÂÃ…â€™ Als er geen relevante context gevonden werd, geef fallback met zoeklink terug
     if (!$relevantFound) {
+        $fallback_topic = $topic !== '' ? $topic : $retrieval_topic;
+        $fallback_reference_candidates = function_exists('octopus_ai_select_topic_reference_links')
+            ? octopus_ai_select_topic_reference_links($message, $fallback_topic, $lang, 3)
+            : [];
+        $fallback_answer = octopus_ai_build_no_solution_answer(
+            $lang,
+            $message,
+            $fallback,
+            [
+                'references' => $fallback_reference_candidates,
+                'handoff_url' => function_exists('octopus_ai_get_handoff_url') ? octopus_ai_get_handoff_url($lang) : '',
+            ]
+        );
+
         return rest_ensure_response([
-            'answer' => octopus_ai_build_no_solution_answer($lang, $message, $fallback),
+            'answer' => $fallback_answer,
             'chat_id' => 0,
             'status' => 'fallback',
+            'confidence' => 0.0,
+            'reference_links' => function_exists('octopus_ai_select_top_reference_links')
+                ? octopus_ai_select_top_reference_links($fallback_reference_candidates, $lang, 3)
+                : [],
         ]);
     }
 
@@ -1779,6 +2093,16 @@ EOT;
         $topic_scope_instruction = ($lang === 'FR')
             ? "Flux actif: Logiciel de comptabilite. Reponds uniquement dans le cadre du logiciel de comptabilite (compta, TVA, journaux, rapports). Si la question concerne la Plateforme Digitale Interactive (PDI), demande a l'utilisateur de changer de flux."
             : "Actieve flow: Boekhoudprogramma. Beantwoord enkel binnen de context van het boekhoudprogramma (boekhouding, btw, dagboeken, rapporten). Als de vraag over het klantenportaal gaat, vraag de gebruiker om van flow te wisselen.";
+    } else {
+        $topic_scope_instruction = ($lang === 'FR')
+            ? "Aucun flux fixe selectionne. Recherche dans la Plateforme Digitale Interactive (PDI) et dans le logiciel de comptabilite. Donne directement la reponse la plus pertinente. Demande un choix de flux uniquement si les deux flux semblent aussi pertinents."
+            : "Geen vaste flow geselecteerd. Zoek in zowel Klantenportaal als Boekhoudprogramma. Geef meteen het meest passende inhoudelijke antwoord. Vraag alleen om een flowkeuze als beide flows even relevant lijken.";
+        if ($retrieval_topic !== '') {
+            $retrieval_label = octopus_ai_get_topic_label($retrieval_topic, $lang);
+            $topic_scope_instruction .= ($lang === 'FR')
+                ? " La question semble surtout concerner {$retrieval_label}; privilegie d'abord ce flux, puis ajoute l'autre uniquement si utile."
+                : " De vraag lijkt vooral over {$retrieval_label} te gaan; prioritiseer eerst die flow en gebruik de andere alleen indien nodig.";
+        }
     }
 
     if ($topic_scope_instruction !== '') {
@@ -1813,8 +2137,9 @@ EOT;
     $best_topic_link     = '';
     $best_topic_score    = -1.0;
 
+    $topic_for_reference = $topic !== '' ? $topic : $retrieval_topic;
     $topic_reference_links = function_exists('octopus_ai_select_topic_reference_links')
-        ? octopus_ai_select_topic_reference_links($message, $topic, $lang, 5)
+        ? octopus_ai_select_topic_reference_links($message, $topic_for_reference, $lang, 5)
         : [];
 
     if (!empty($topic_reference_links)) {
@@ -1854,8 +2179,8 @@ EOT;
     if (!empty($metadata_chunks)) {
         $system_prompt .= "\n\nDeze informatie komt uit de volgende onderdelen:\n";
         foreach ($metadata_chunks as $meta) {
-            $title         = sanitize_text_field($meta['section_title'] ?? '');
-            $slug          = sanitize_text_field($meta['page_slug'] ?? '');
+            $title        = sanitize_text_field($meta['section_title'] ?? '');
+            $slug         = sanitize_text_field($meta['page_slug'] ?? '');
             $current_score = isset($meta['score']) ? (float) $meta['score'] : 0.0;
 
             $manual_candidates = function_exists('octopus_ai_get_manual_url_candidates')
@@ -1878,14 +2203,16 @@ EOT;
 
                 $path = (string) wp_parse_url($candidate_url, PHP_URL_PATH);
                 $is_manual_path = stripos($path, '/manual/') !== false;
-                $candidate_score = octopus_ai_score_reference_candidate(
-                    $message,
-                    $topic,
-                    $title,
-                    $slug,
-                    $candidate_url,
-                    $current_score
-                );
+                $candidate_score = function_exists('octopus_ai_score_reference_candidate')
+                    ? octopus_ai_score_reference_candidate(
+                        $message,
+                        $topic_for_reference,
+                        $title,
+                        $slug,
+                        $candidate_url,
+                        $current_score
+                    )
+                    : $current_score;
 
                 $possible_links[] = [
                     'url'       => $candidate_url,
@@ -1899,7 +2226,6 @@ EOT;
                 if ($title !== '') {
                     $system_prompt .= "- *{$title}*\n";
                 }
-
                 foreach ($possible_links as $link_info) {
                     $link  = $link_info['url'];
                     $score = isset($link_info['score']) ? (float) $link_info['score'] : 0.0;
@@ -1925,7 +2251,9 @@ EOT;
                         $validLinkFound = true;
 
                         $reference_candidates[] = [
-                            'title' => octopus_ai_build_reference_title($title, $slug, $link, $lang),
+                            'title' => function_exists('octopus_ai_build_reference_title')
+                                ? octopus_ai_build_reference_title($title, $slug, $link, $lang)
+                                : ($title !== '' ? $title : (($lang === 'FR') ? 'Voir dans le manuel' : 'Bekijk dit in de handleiding')),
                             'url'   => $link,
                             'score' => $score,
                         ];
@@ -1950,14 +2278,16 @@ EOT;
             $system_prompt .= "- [{$label}]({$link})\n";
 
             $base_live_score = max(0.1, $live_best_score - ($index * 0.1));
-            $live_link_score = octopus_ai_score_reference_candidate(
-                $message,
-                $topic,
-                '',
-                '',
-                $link,
-                $base_live_score
-            );
+            $live_link_score = function_exists('octopus_ai_score_reference_candidate')
+                ? octopus_ai_score_reference_candidate(
+                    $message,
+                    $topic_for_reference,
+                    '',
+                    '',
+                    $link,
+                    $base_live_score
+                )
+                : $base_live_score;
 
             if ($live_link_score > $best_live_score) {
                 $best_live_score = $live_link_score;
@@ -1976,14 +2306,16 @@ EOT;
     if (!empty($live_best_source)) {
         $live_best_source = esc_url_raw((string) $live_best_source);
         if ($live_best_source !== '') {
-            $candidate_live_best_score = octopus_ai_score_reference_candidate(
-                $message,
-                $topic,
-                '',
-                '',
-                $live_best_source,
-                max($live_best_score, 0.1)
-            );
+            $candidate_live_best_score = function_exists('octopus_ai_score_reference_candidate')
+                ? octopus_ai_score_reference_candidate(
+                    $message,
+                    $topic_for_reference,
+                    '',
+                    '',
+                    $live_best_source,
+                    max($live_best_score, 0.1)
+                )
+                : max($live_best_score, 0.1);
 
             if ($candidate_live_best_score > $best_live_score) {
                 $best_live_score = $candidate_live_best_score;
@@ -2012,7 +2344,7 @@ EOT;
     if (!empty($live_best_source)) {
         $preferred_candidates[] = [
             'url' => esc_url_raw((string) $live_best_source),
-            'score' => max(0.1, $live_best_score),
+            'score' => max(0.1, $best_live_score),
         ];
     }
 
@@ -2042,9 +2374,6 @@ EOT;
     }
 
     if ($primary_doc_url !== '') {
-        $primary_label = ($lang === 'FR') ? 'Lien principal du manuel' : 'Primaire handleidinglink';
-        $system_prompt .= "\n\n{$primary_label}:\n[{$primary_label}]({$primary_doc_url})\n";
-
         $reference_candidates[] = [
             'title' => ($lang === 'FR') ? 'Page du manuel' : 'Handleidingpagina',
             'url'   => $primary_doc_url,
@@ -2053,6 +2382,59 @@ EOT;
     }
 
     // ÃƒÂ¢Ã…Â¾Ã¢â‚¬Â¢ Opbouw history
+    $selected_reference_links = function_exists('octopus_ai_select_top_reference_links')
+        ? octopus_ai_select_top_reference_links($reference_candidates, $lang, 3)
+        : [];
+    $confidence_score = function_exists('octopus_ai_calculate_answer_confidence')
+        ? octopus_ai_calculate_answer_confidence([
+            'context' => $context,
+            'live_context' => $live_context,
+            'metadata_chunks' => $metadata_chunks,
+            'best_metadata_score' => $best_metadata_score,
+            'best_live_score' => $live_best_score,
+            'reference_count' => count($selected_reference_links),
+            'topic_selected' => ($topic !== '' || $retrieval_topic !== ''),
+        ])
+        : 1.0;
+    $confidence_threshold = function_exists('octopus_ai_get_confidence_threshold')
+        ? (float) octopus_ai_get_confidence_threshold()
+        : 0.55;
+
+    if ($confidence_score < $confidence_threshold) {
+        $low_confidence_answer = octopus_ai_build_no_solution_answer(
+            $lang,
+            $message,
+            $fallback,
+            [
+                'references' => $selected_reference_links,
+                'handoff_url' => function_exists('octopus_ai_get_handoff_url') ? octopus_ai_get_handoff_url($lang) : '',
+            ]
+        );
+
+        if (!function_exists('octopus_ai_log_interaction')) {
+            require_once plugin_dir_path(__FILE__) . 'logger.php';
+        }
+
+        $chat_id = 0;
+        if (function_exists('octopus_ai_log_interaction')) {
+            $context_length = strlen($context) + strlen($live_context);
+            $error_message = wp_json_encode([
+                'reason' => 'low_confidence_fallback',
+                'confidence_score' => round($confidence_score, 4),
+                'confidence_threshold' => round($confidence_threshold, 4),
+            ]);
+            $chat_id = (int) octopus_ai_log_interaction($message, $low_confidence_answer, $context_length, 'fail', (string) $error_message);
+        }
+
+        return rest_ensure_response([
+            'answer' => $low_confidence_answer,
+            'chat_id' => $chat_id,
+            'status' => 'low_confidence_fallback',
+            'confidence' => round($confidence_score, 3),
+            'reference_links' => $selected_reference_links,
+        ]);
+    }
+
     $messages = [['role' => 'system', 'content' => $system_prompt]];
     $current_message_present = false;
     foreach ($history as $entry) {
@@ -2306,6 +2688,8 @@ return rest_ensure_response([
     'answer' => $answer,
     'chat_id' => $chat_id,
     'status' => $status,
+    'confidence' => round((float) $confidence_score, 3),
+    'reference_links' => is_array($selected_reference_links) ? $selected_reference_links : [],
 ]);
 
     } catch (Throwable $exception) {

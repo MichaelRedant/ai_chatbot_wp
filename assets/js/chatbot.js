@@ -795,8 +795,8 @@ document.addEventListener('DOMContentLoaded', function () {
 
     buildTopicTermsMap(rawMap) {
       const defaults = {
-        klantenportaal: ['klantenportaal', 'platform', 'plateforme', 'plateforme digitale interactive', 'pdi', 'portal', 'portail', 'klant', 'client', 'factuur', 'facture', 'betaling', 'paiement', 'upload'],
-        boekhoudprogramma: ['boekhoud', 'boekhouding', 'boekhoudprogramma', 'compta', 'comptabilite', 'btw', 'tva', 'journaal', 'journal', 'balans', 'rapport']
+        klantenportaal: ['klantenportaal', 'platform', 'plateforme', 'plateforme digitale interactive', 'pdi', 'portal', 'webportal', 'manualportal', 'portail', 'klant', 'client', 'factuur', 'facture', 'betaling', 'paiement', 'upload'],
+        boekhoudprogramma: ['boekhoud', 'boekhouding', 'boekhoudprogramma', 'accounting', 'accountingprogram', 'compta', 'comptabilite', 'btw', 'tva', 'journaal', 'journal', 'balans', 'rapport', 'manual_accounting']
       };
 
       const source = rawMap && typeof rawMap === 'object' ? rawMap : {};
@@ -1099,6 +1099,8 @@ document.addEventListener('DOMContentLoaded', function () {
         } else {
           this.dismissedSuggestedTopics.add(suggested.key);
           finalize(this.lang === 'FR' ? "D'accord, je continue sans flux fixe." : 'Prima, ik ga verder zonder vaste flow.');
+          this.updateComposerState();
+          return;
         }
 
         this.setSendingState(true);
@@ -1111,19 +1113,15 @@ document.addEventListener('DOMContentLoaded', function () {
             { skipTopicMismatch: true }
           );
           const followAnswer = String((followPayload && followPayload.answer) || '').trim();
-          const shouldAppendFollowAnswer = followAnswer !== '' && (!isSet || followAnswer !== fallbackAnswer);
+          const shouldAppendFollowAnswer = followAnswer !== '' && followAnswer !== fallbackAnswer;
 
           if (shouldAppendFollowAnswer) {
             this.addMessage(followAnswer, 'bot', { chatId: followPayload ? followPayload.chatId : 0 });
           }
 
-          if (isSet) {
-            finalize(this.lang === 'FR' ? 'Flux defini.' : 'Flow ingesteld.');
-          }
+          finalize(this.lang === 'FR' ? 'Flux defini.' : 'Flow ingesteld.');
         } catch (error) {
-          if (!isSet) {
-            this.addMessage(this.i18n.api_error || 'Er ging iets mis met het ophalen van het antwoord.', 'bot', { chatId: 0 });
-          }
+          this.addMessage(this.i18n.api_error || 'Er ging iets mis met het ophalen van het antwoord.', 'bot', { chatId: 0 });
           finalize(this.lang === 'FR' ? 'Proposition non traitee.' : 'Keuze kon niet verwerkt worden.');
         } finally {
           typing.remove();
