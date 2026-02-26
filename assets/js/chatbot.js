@@ -130,7 +130,8 @@ document.addEventListener('DOMContentLoaded', function () {
       chatId: 0,
       status: '',
       suggestedTopic: '',
-      currentTopic: ''
+      currentTopic: '',
+      primarySourceUrl: ''
     };
 
     if (!fallbackText) return payload;
@@ -157,6 +158,9 @@ document.addEventListener('DOMContentLoaded', function () {
           : '';
         payload.currentTopic = typeof (root.current_topic ?? parsed.current_topic) === 'string'
           ? String(root.current_topic ?? parsed.current_topic)
+          : '';
+        payload.primarySourceUrl = typeof (root.primary_source_url ?? parsed.primary_source_url) === 'string'
+          ? String(root.primary_source_url ?? parsed.primary_source_url).trim()
           : '';
         return payload;
       }
@@ -267,8 +271,8 @@ document.addEventListener('DOMContentLoaded', function () {
         return '<a href="' + safeHref + '" target="_blank" rel="noopener noreferrer">' + label + '</a>';
       });
 
-    html = html.replace(/https:\/\/login\.octopus\.be\/manual\/[\w/\-_.?#=&%]+/g, function (url, offset) {
-      const before = html.slice(Math.max(0, offset - 15), offset);
+    html = html.replace(/https?:\/\/[^\s<>"')]+/g, function (url, offset) {
+      const before = html.slice(Math.max(0, offset - 30), offset).toLowerCase();
       if (before.indexOf('href=') !== -1) return url;
       const safeUrl = sanitizeUrl(url);
       if (!safeUrl) return '';
@@ -298,22 +302,7 @@ document.addEventListener('DOMContentLoaded', function () {
       this.isEmbedded = this.mode === 'embedded';
       this.isExpanded = false;
 
-      this.topicChoices = [
-        {
-          key: 'klantenportaal',
-          labelNl: 'Klantenportaal',
-          labelFr: 'Plateforme Digitale Interactive (PDI)',
-          descNl: 'Vragen over facturen, betalingen of support via het klantenportaal.',
-          descFr: 'Questions sur les factures, paiements ou support dans la Plateforme Digitale Interactive (PDI).'
-        },
-        {
-          key: 'boekhoudprogramma',
-          labelNl: 'Boekhoudprogramma',
-          labelFr: 'Logiciel de comptabilite',
-          descNl: 'Vragen over boekhouding, btw of rapportages binnen het boekhoudprogramma.',
-          descFr: 'Questions sur la comptabilite, TVA ou rapports dans le logiciel.'
-        }
-      ];
+      this.topicChoices = this.buildTopicChoices(this.settings.topic_choices, this.settings.topic_terms);
       this.topicTermsMap = this.buildTopicTermsMap(this.settings.topic_terms);
       this.pendingSuggestedTopic = '';
       this.previousTopicBeforeSelection = '';
@@ -544,8 +533,8 @@ document.addEventListener('DOMContentLoaded', function () {
       this.topicPanel.innerHTML = `
         <div class="topic-panel-inner">
           <p class="topic-intro">${this.lang === 'FR'
-            ? 'Souhaitez-vous poser une question sur la Plateforme Digitale Interactive (PDI) ou le logiciel comptable ?'
-            : 'Heb je een vraag over het klantenportaal of het boekhoudprogramma?'}</p>
+            ? 'Choisis le flux qui correspond le mieux a ta question.'
+            : 'Kies de flow die het best bij je vraag past.'}</p>
           <div class="topic-grid">
             ${this.topicChoices.map((choice) => `
               <button type="button" class="topic-option" data-topic="${choice.key}">
@@ -756,14 +745,16 @@ document.addEventListener('DOMContentLoaded', function () {
           const sender = entry.sender === 'user' ? 'user' : 'bot';
           const text = typeof entry.content === 'string' ? entry.content : '';
           const chatId = Number(entry.chatId || 0);
+          const primarySourceUrl = typeof entry.primarySourceUrl === 'string' ? entry.primarySourceUrl.trim() : '';
           if (!text) return;
 
           this.messages.push({
             sender: sender,
             content: text,
-            chatId: chatId
+            chatId: chatId,
+            primarySourceUrl: primarySourceUrl
           });
-          this.renderMessage(text, sender, { chatId: chatId });
+          this.renderMessage(text, sender, { chatId: chatId, primarySourceUrl: primarySourceUrl });
         });
       } catch (error) {
         sessionStorage.removeItem(this.historyStorageKey);
@@ -783,6 +774,74 @@ document.addEventListener('DOMContentLoaded', function () {
       return this.lang === 'FR' ? choice.descFr : choice.descNl;
     }
 
+    buildTopicChoices(rawChoices, rawTerms) {
+      const parsed = [];
+      if (Array.isArray(rawChoices) && rawChoices.length) {
+        rawChoices.forEach((choice) => {
+          if (!choice || typeof choice !== 'object') return;
+
+          const key = String(choice.key || '')
+            .toLowerCase()
+            .replace(/[^a-z0-9_-]/g, '')
+            .trim();
+          if (!key) return;
+          if (parsed.some((item) => item.key === key)) return;
+
+          const labelNl = String(choice.label_nl || choice.labelNl || key).trim();
+          const labelFr = String(choice.label_fr || choice.labelFr || labelNl).trim();
+          const descNl = String(choice.desc_nl || choice.descNl || '').trim();
+          const descFr = String(choice.desc_fr || choice.descFr || descNl).trim();
+
+          parsed.push({
+            key: key,
+            labelNl: labelNl || key,
+            labelFr: labelFr || (labelNl || key),
+            descNl: descNl,
+            descFr: descFr
+          });
+        });
+      }
+
+      if (parsed.length) {
+        return parsed;
+      }
+
+      const fallbackFromTerms = [];
+      if (rawTerms && typeof rawTerms === 'object') {
+        Object.keys(rawTerms).forEach((rawKey) => {
+          const key = String(rawKey || '')
+            .toLowerCase()
+            .replace(/[^a-z0-9_-]/g, '')
+            .trim();
+          if (!key || fallbackFromTerms.some((item) => item.key === key)) return;
+
+          const label = key.replace(/[_-]+/g, ' ').trim();
+          const title = label ? (label.charAt(0).toUpperCase() + label.slice(1)) : key;
+          fallbackFromTerms.push({
+            key: key,
+            labelNl: title,
+            labelFr: title,
+            descNl: '',
+            descFr: ''
+          });
+        });
+      }
+
+      if (fallbackFromTerms.length) {
+        return fallbackFromTerms;
+      }
+
+      return [
+        {
+          key: 'flow',
+          labelNl: 'Flow',
+          labelFr: 'Flux',
+          descNl: '',
+          descFr: ''
+        }
+      ];
+    }
+
     normalizeTopicText(value) {
       return String(value || '')
         .toLowerCase()
@@ -794,17 +853,14 @@ document.addEventListener('DOMContentLoaded', function () {
     }
 
     buildTopicTermsMap(rawMap) {
-      const defaults = {
-        klantenportaal: ['klantenportaal', 'platform', 'plateforme', 'plateforme digitale interactive', 'pdi', 'portal', 'webportal', 'manualportal', 'portail', 'klant', 'client', 'factuur', 'facture', 'betaling', 'paiement', 'upload'],
-        boekhoudprogramma: ['boekhoud', 'boekhouding', 'boekhoudprogramma', 'accounting', 'accountingprogram', 'compta', 'comptabilite', 'btw', 'tva', 'journaal', 'journal', 'balans', 'rapport', 'manual_accounting']
-      };
-
       const source = rawMap && typeof rawMap === 'object' ? rawMap : {};
       const map = {};
 
       this.topicChoices.forEach((choice) => {
         const key = choice.key;
-        const candidateTerms = Array.isArray(source[key]) && source[key].length ? source[key] : (defaults[key] || []);
+        const candidateTerms = Array.isArray(source[key]) && source[key].length
+          ? source[key]
+          : [choice.labelNl, choice.labelFr, key];
         const cleanTerms = [];
         candidateTerms.forEach((term) => {
           const normalized = this.normalizeTopicText(term);
@@ -961,7 +1017,14 @@ document.addEventListener('DOMContentLoaded', function () {
 
     showTopicMismatchDecision(messageText, payload, suggested) {
       if (!this.showTopicSelector || !suggested) {
-        this.addMessage(payload.answer || (this.i18n.api_error || 'Er ging iets mis met het ophalen van het antwoord.'), 'bot', { chatId: payload.chatId });
+        this.addMessage(
+          payload.answer || (this.i18n.api_error || 'Er ging iets mis met het ophalen van het antwoord.'),
+          'bot',
+          {
+            chatId: payload.chatId,
+            primarySourceUrl: payload.primarySourceUrl
+          }
+        );
         return;
       }
 
@@ -1025,7 +1088,10 @@ document.addEventListener('DOMContentLoaded', function () {
           }
 
           const followAnswer = (followPayload && followPayload.answer) || payload.answer || (this.i18n.api_error || 'Er ging iets mis met het ophalen van het antwoord.');
-          this.addMessage(followAnswer, 'bot', { chatId: followPayload ? followPayload.chatId : 0 });
+          this.addMessage(followAnswer, 'bot', {
+            chatId: followPayload ? followPayload.chatId : 0,
+            primarySourceUrl: followPayload ? followPayload.primarySourceUrl : payload.primarySourceUrl
+          });
           actions.innerHTML = '<span class="topic-switch-note">' + escapeHtml(this.lang === 'FR' ? 'Choix applique.' : 'Keuze toegepast.') + '</span>';
         } catch (error) {
           this.addMessage(this.i18n.api_error || 'Er ging iets mis met het ophalen van het antwoord.', 'bot', { chatId: 0 });
@@ -1116,7 +1182,10 @@ document.addEventListener('DOMContentLoaded', function () {
           const shouldAppendFollowAnswer = followAnswer !== '' && followAnswer !== fallbackAnswer;
 
           if (shouldAppendFollowAnswer) {
-            this.addMessage(followAnswer, 'bot', { chatId: followPayload ? followPayload.chatId : 0 });
+            this.addMessage(followAnswer, 'bot', {
+              chatId: followPayload ? followPayload.chatId : 0,
+              primarySourceUrl: followPayload ? followPayload.primarySourceUrl : ''
+            });
           }
 
           finalize(this.lang === 'FR' ? 'Flux defini.' : 'Flow ingesteld.');
@@ -1239,6 +1308,40 @@ document.addEventListener('DOMContentLoaded', function () {
       message.innerHTML = formatMessageToHtml(content, this.fallbackButtonLabel);
 
       if (sender === 'bot') {
+        const primarySourceUrl = typeof (options && options.primarySourceUrl) === 'string'
+          ? String(options.primarySourceUrl).trim()
+          : '';
+        if (primarySourceUrl) {
+          let safeSourceUrl = '';
+          try {
+            const parsedUrl = new URL(primarySourceUrl, window.location.origin);
+            if (parsedUrl.protocol === 'http:' || parsedUrl.protocol === 'https:') {
+              safeSourceUrl = parsedUrl.toString();
+            }
+          } catch (error) {
+            safeSourceUrl = '';
+          }
+
+          if (safeSourceUrl) {
+            const sourceWrap = document.createElement('div');
+            sourceWrap.className = 'octopus-primary-source';
+
+            const sourceLabel = document.createElement('span');
+            sourceLabel.className = 'octopus-primary-source-label';
+            sourceLabel.textContent = this.lang === 'FR' ? 'Source principale:' : 'Primaire bron:';
+            sourceWrap.appendChild(sourceLabel);
+
+            const sourceLink = document.createElement('a');
+            sourceLink.href = safeSourceUrl;
+            sourceLink.target = '_blank';
+            sourceLink.rel = 'noopener noreferrer';
+            sourceLink.textContent = this.lang === 'FR' ? 'Voir la page' : 'Bekijk pagina';
+            sourceWrap.appendChild(sourceLink);
+
+            message.appendChild(sourceWrap);
+          }
+        }
+
         const chatId = Number(options && options.chatId ? options.chatId : 0);
         if (chatId > 0 && !this.sentFeedback.has(chatId)) {
           message.insertAdjacentHTML('beforeend', `
@@ -1262,12 +1365,18 @@ document.addEventListener('DOMContentLoaded', function () {
       const payload = {
         sender: sender === 'user' ? 'user' : 'bot',
         content: String(content || ''),
-        chatId: Number(options && options.chatId ? options.chatId : 0)
+        chatId: Number(options && options.chatId ? options.chatId : 0),
+        primarySourceUrl: typeof (options && options.primarySourceUrl) === 'string'
+          ? String(options.primarySourceUrl).trim()
+          : ''
       };
 
       if (!payload.content.trim()) return;
       this.messages.push(payload);
-      const node = this.renderMessage(payload.content, payload.sender, { chatId: payload.chatId });
+      const node = this.renderMessage(payload.content, payload.sender, {
+        chatId: payload.chatId,
+        primarySourceUrl: payload.primarySourceUrl
+      });
       this.saveMessages();
       return node;
     }
@@ -1352,7 +1461,10 @@ document.addEventListener('DOMContentLoaded', function () {
           return;
         }
 
-        this.addMessage(answer, 'bot', { chatId: payload.chatId });
+        this.addMessage(answer, 'bot', {
+          chatId: payload.chatId,
+          primarySourceUrl: payload.primarySourceUrl
+        });
 
         if (payload.status === 'topic_mismatch' && this.showTopicSelector) {
           this.requestTopicSelection({

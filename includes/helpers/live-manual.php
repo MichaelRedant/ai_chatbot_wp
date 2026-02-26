@@ -72,9 +72,23 @@ function octopus_ai_get_manual_base_url($lang)
         }
     }
 
+    $provider_defaults = function_exists('octopus_ai_get_default_provider_profile')
+        ? octopus_ai_get_default_provider_profile()
+        : [];
+    $default_manual = isset($provider_defaults['manual']) && is_array($provider_defaults['manual'])
+        ? $provider_defaults['manual']
+        : [];
+    $fallback_base = $lang_key === 'fr'
+        ? (string) ($default_manual['base_url_fr'] ?? '')
+        : (string) ($default_manual['base_url_nl'] ?? '');
+    $fallback_base = octopus_ai_normalize_manual_base($fallback_base);
+    if ($fallback_base !== '') {
+        return $fallback_base;
+    }
+
     return $lang_key === 'fr'
-        ? 'https://login.octopus.be/manual/FR/'
-        : 'https://login.octopus.be/manual/NL/';
+        ? 'https://example.com/manual/fr/'
+        : 'https://example.com/manual/nl/';
 }
 
 /**
@@ -1115,9 +1129,32 @@ if (!function_exists('octopus_ai_extract_manual_query_terms')) {
         }
 
         $lang_key = strtoupper((string) $lang) === 'FR' ? 'fr' : 'nl';
-        $stopwords_nl = ['een', 'het', 'de', 'en', 'of', 'ik', 'je', 'jij', 'u', 'wij', 'met', 'voor', 'over', 'van', 'in', 'op', 'te', 'hoe', 'wat', 'waar', 'kan', 'kunnen', 'wil', 'wilt', 'als', 'dan', 'dit', 'dat', 'bij', 'naar', 'octopus'];
-        $stopwords_fr = ['le', 'la', 'les', 'de', 'du', 'des', 'et', 'ou', 'je', 'tu', 'vous', 'nous', 'avec', 'pour', 'sur', 'dans', 'est', 'sont', 'comment', 'quoi', 'ou', 'peux', 'peut', 'veux', 'si', 'ce', 'cet', 'cette', 'octopus'];
+        $stopwords_nl = ['een', 'het', 'de', 'en', 'of', 'ik', 'je', 'jij', 'u', 'wij', 'met', 'voor', 'over', 'van', 'in', 'op', 'te', 'hoe', 'wat', 'waar', 'kan', 'kunnen', 'wil', 'wilt', 'als', 'dan', 'dit', 'dat', 'bij', 'naar'];
+        $stopwords_fr = ['le', 'la', 'les', 'de', 'du', 'des', 'et', 'ou', 'je', 'tu', 'vous', 'nous', 'avec', 'pour', 'sur', 'dans', 'est', 'sont', 'comment', 'quoi', 'ou', 'peux', 'peut', 'veux', 'si', 'ce', 'cet', 'cette'];
         $stopwords = $lang_key === 'fr' ? $stopwords_fr : $stopwords_nl;
+
+        $provider_stopwords = function_exists('octopus_ai_get_provider_retrieval_stopwords')
+            ? octopus_ai_get_provider_retrieval_stopwords()
+            : [];
+        $provider_profile = function_exists('octopus_ai_get_provider_profile')
+            ? octopus_ai_get_provider_profile()
+            : [];
+        $provider_brand_terms = isset($provider_profile['brand_terms']) && is_array($provider_profile['brand_terms'])
+            ? $provider_profile['brand_terms']
+            : [];
+        $provider_stopwords = array_merge(
+            is_array($provider_stopwords) ? $provider_stopwords : [],
+            is_array($provider_brand_terms) ? $provider_brand_terms : []
+        );
+        foreach ($provider_stopwords as $provider_stopword) {
+            $provider_stopword = function_exists('octopus_ai_normalize_text_for_compare')
+                ? octopus_ai_normalize_text_for_compare((string) $provider_stopword)
+                : strtolower(trim((string) $provider_stopword));
+            if ($provider_stopword === '' || in_array($provider_stopword, $stopwords, true)) {
+                continue;
+            }
+            $stopwords[] = $provider_stopword;
+        }
 
         $terms = [];
         foreach ($parts as $part) {
@@ -1135,40 +1172,94 @@ if (!function_exists('octopus_ai_extract_manual_query_terms')) {
             }
         }
 
-        // Domain-specifieke termuitbreiding om NL/FR-vragen beter te koppelen aan handleiding-URL's (vaak EN-slugs).
-        $synonyms = [
-            'klantenportaal' => ['webportal', 'portal', 'customerportal', 'pdi'],
-            'boekhoudprogramma' => ['accountingprogram', 'boekhouding', 'accounting'],
-            'logo' => ['branding', 'brand', 'huisstijl'],
-            'factuur' => ['invoice', 'invoices', 'facturen'],
-            'klant' => ['customer', 'client'],
-            'portail' => ['portal', 'webportal', 'pdi'],
-            'comptabilite' => ['accounting', 'boekhouding'],
-            'facture' => ['invoice', 'factuur'],
-        ];
-
-        $expanded = $terms;
-        foreach ($terms as $term) {
-            if (isset($synonyms[$term]) && is_array($synonyms[$term])) {
-                foreach ($synonyms[$term] as $synonym) {
-                    $synonym = trim((string) $synonym);
-                    if ($synonym !== '' && !in_array($synonym, $expanded, true)) {
-                        $expanded[] = $synonym;
-                    }
-                }
+        // Breid zoektermen uit via provider-topic termen zodat core geen domeinspecifieke woorden hoeft te hardcoden.
+        $topic_term_buckets = [];
+        $append_topic_bucket = static function ($topic_key, $terms_to_add) use (&$topic_term_buckets) {
+            $topic_key = sanitize_key((string) $topic_key);
+            if ($topic_key === '' || !is_array($terms_to_add)) {
+                return;
             }
 
-            foreach ($synonyms as $base_term => $mapped_terms) {
-                if (!is_array($mapped_terms)) {
+            if (!isset($topic_term_buckets[$topic_key]) || !is_array($topic_term_buckets[$topic_key])) {
+                $topic_term_buckets[$topic_key] = [];
+            }
+
+            foreach ($terms_to_add as $bucket_term) {
+                $bucket_term = function_exists('octopus_ai_normalize_text_for_compare')
+                    ? octopus_ai_normalize_text_for_compare((string) $bucket_term)
+                    : strtolower(trim((string) $bucket_term));
+                if ($bucket_term === '' || strlen($bucket_term) < 3 || in_array($bucket_term, $topic_term_buckets[$topic_key], true)) {
                     continue;
                 }
-                if (in_array($term, $mapped_terms, true) && !in_array($base_term, $expanded, true)) {
-                    $expanded[] = $base_term;
+                $topic_term_buckets[$topic_key][] = $bucket_term;
+            }
+        };
+
+        $provider_topic_terms = function_exists('octopus_ai_get_provider_topic_terms_map')
+            ? octopus_ai_get_provider_topic_terms_map()
+            : [];
+        if (is_array($provider_topic_terms)) {
+            foreach ($provider_topic_terms as $provider_topic_key => $provider_terms) {
+                $append_topic_bucket($provider_topic_key, $provider_terms);
+            }
+        }
+
+        $provider_retrieval_topic_terms = function_exists('octopus_ai_get_provider_retrieval_topic_terms_map')
+            ? octopus_ai_get_provider_retrieval_topic_terms_map()
+            : [];
+        if (is_array($provider_retrieval_topic_terms)) {
+            foreach ($provider_retrieval_topic_terms as $provider_topic_key => $provider_terms) {
+                $append_topic_bucket($provider_topic_key, $provider_terms);
+            }
+        }
+
+        if (function_exists('octopus_ai_get_provider_topic_labels_map')) {
+            $provider_labels = octopus_ai_get_provider_topic_labels_map();
+            if (is_array($provider_labels)) {
+                foreach ($provider_labels as $provider_topic_key => $label_pair) {
+                    if (!is_array($label_pair)) {
+                        continue;
+                    }
+                    $append_topic_bucket($provider_topic_key, [
+                        $provider_topic_key,
+                        $label_pair['nl'] ?? '',
+                        $label_pair['fr'] ?? '',
+                    ]);
                 }
             }
         }
 
+        if (empty($topic_term_buckets) && function_exists('octopus_ai_get_default_provider_profile')) {
+            $provider_defaults = octopus_ai_get_default_provider_profile();
+            $default_topic_terms = isset($provider_defaults['topic_terms']) && is_array($provider_defaults['topic_terms'])
+                ? $provider_defaults['topic_terms']
+                : [];
+            foreach ($default_topic_terms as $provider_topic_key => $provider_terms) {
+                $append_topic_bucket($provider_topic_key, $provider_terms);
+            }
+        }
+
+        $expanded = $terms;
         $max_expanded = max($limit, $limit * 2);
+        $max_expanded = max(10, min(40, $max_expanded));
+        foreach ($terms as $term) {
+            foreach ($topic_term_buckets as $bucket_terms) {
+                if (!is_array($bucket_terms) || empty($bucket_terms) || !in_array($term, $bucket_terms, true)) {
+                    continue;
+                }
+
+                foreach ($bucket_terms as $bucket_term) {
+                    if ($bucket_term === '' || in_array($bucket_term, $expanded, true)) {
+                        continue;
+                    }
+                    $expanded[] = $bucket_term;
+                    if (count($expanded) >= $max_expanded) {
+                        break 3;
+                    }
+                }
+            }
+        }
+
         if (count($expanded) > $max_expanded) {
             $expanded = array_slice($expanded, 0, $max_expanded);
         }

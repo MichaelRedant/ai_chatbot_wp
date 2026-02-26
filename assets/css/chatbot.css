@@ -756,6 +756,32 @@ body.octopus-chat-expanded {
     border-radius: 3px;
 }
 
+.bot-message .octopus-primary-source {
+    margin-top: 8px;
+    padding-top: 6px;
+    border-top: 1px dashed rgba(11, 95, 134, 0.28);
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 4px;
+    font-size: 12px;
+    line-height: 1.35;
+    color: #365a6d;
+}
+
+.bot-message .octopus-primary-source-label {
+    font-weight: 600;
+    opacity: 0.85;
+}
+
+.bot-message .octopus-primary-source a {
+    font-size: 12px;
+}
+
+.bot-message .octopus-primary-source a::after {
+    content: "";
+}
+
 .fallback-link a:hover {
     text-decoration: underline;
     color: #0c5f89;

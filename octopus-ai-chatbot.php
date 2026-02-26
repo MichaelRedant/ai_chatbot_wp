@@ -467,6 +467,26 @@ if (!function_exists('octopus_ai_collect_preflight_report')) {
             $report['ok'][] = 'WP-Cron staat aan.';
         }
 
+        if (function_exists('octopus_ai_build_quality_gate_report')) {
+            $quality_gate = octopus_ai_build_quality_gate_report();
+            $quality_enabled = !empty($quality_gate['enabled']);
+            $quality_pass = !empty($quality_gate['pass']);
+
+            if (!$quality_enabled) {
+                $report['warning'][] = 'Quality gate staat uit. Schakel in voor strengere productiecontrole.';
+            } elseif (!$quality_pass) {
+                $failed_labels = isset($quality_gate['failed_labels']) && is_array($quality_gate['failed_labels'])
+                    ? array_values(array_filter(array_map('sanitize_text_field', $quality_gate['failed_labels'])))
+                    : array();
+                $reason = !empty($failed_labels)
+                    ? implode(', ', $failed_labels)
+                    : 'onbekende kwaliteitschecks';
+                $report['critical'][] = 'Quality gate faalt: ' . $reason . '.';
+            } else {
+                $report['ok'][] = 'Quality gate: PASS.';
+            }
+        }
+
         return $report;
     }
 }
@@ -734,10 +754,19 @@ function octopus_ai_enqueue_frontend_assets($render_context = null)
                     return array();
                 }
 
-                $allowed_topics = array('klantenportaal', 'boekhoudprogramma');
+                $allowed_topics = function_exists('octopus_ai_get_provider_allowed_topics')
+                    ? octopus_ai_get_provider_allowed_topics()
+                    : array('klantenportaal', 'boekhoudprogramma');
+                if (!is_array($allowed_topics) || empty($allowed_topics)) {
+                    $allowed_topics = array('klantenportaal', 'boekhoudprogramma');
+                }
                 $sanitized = array();
 
                 foreach ($allowed_topics as $topic_key) {
+                    $topic_key = sanitize_key((string) $topic_key);
+                    if ($topic_key === '') {
+                        continue;
+                    }
                     if (!isset($raw_map[$topic_key]) || !is_array($raw_map[$topic_key])) {
                         continue;
                     }
@@ -754,6 +783,50 @@ function octopus_ai_enqueue_frontend_assets($render_context = null)
                     if (!empty($terms)) {
                         $sanitized[$topic_key] = $terms;
                     }
+                }
+
+                return $sanitized;
+            })(),
+            'topic_choices' => (function () {
+                if (!function_exists('octopus_ai_get_provider_topic_choices')) {
+                    return array();
+                }
+
+                $choices = octopus_ai_get_provider_topic_choices();
+                if (!is_array($choices)) {
+                    return array();
+                }
+
+                $sanitized = array();
+                foreach ($choices as $choice) {
+                    if (!is_array($choice)) {
+                        continue;
+                    }
+
+                    $key = sanitize_key((string) ($choice['key'] ?? ''));
+                    if ($key === '') {
+                        continue;
+                    }
+
+                    $label_nl = sanitize_text_field((string) ($choice['label_nl'] ?? ''));
+                    $label_fr = sanitize_text_field((string) ($choice['label_fr'] ?? ''));
+                    $desc_nl = sanitize_text_field((string) ($choice['desc_nl'] ?? ''));
+                    $desc_fr = sanitize_text_field((string) ($choice['desc_fr'] ?? ''));
+
+                    if ($label_nl === '') {
+                        $label_nl = ucfirst(str_replace('_', ' ', $key));
+                    }
+                    if ($label_fr === '') {
+                        $label_fr = $label_nl;
+                    }
+
+                    $sanitized[] = array(
+                        'key' => $key,
+                        'label_nl' => $label_nl,
+                        'label_fr' => $label_fr,
+                        'desc_nl' => $desc_nl,
+                        'desc_fr' => $desc_fr !== '' ? $desc_fr : $desc_nl,
+                    );
                 }
 
                 return $sanitized;

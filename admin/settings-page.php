@@ -37,7 +37,7 @@ add_action('admin_enqueue_scripts', function($hook) {
         wp_enqueue_script('octopus-ai-admin-media', plugin_dir_url(__FILE__) . '../assets/js/admin-media-uploader.js', array('jquery'), '1.0', true);
 
         wp_localize_script('octopus-ai-admin-settings', 'octopusAiAdminSettingsVars', array(
-            'queryParamsToClear' => array('upload', 'delete', 'bulk_delete', 'chunks_deleted', 'chunks_cleared', 'sitemap_debug', 'pages', 'found', 'queued', 'sitemap_saved', 'sitemap_refreshed', 'sitemap_file', 'sitemap_error', 'pdf_queued', 'pdf_error', 'config_imported', 'config_updated', 'config_import_error', 'cleanup_purged', 'cleanup_options', 'cleanup_dirs', 'cleanup_tables', 'cleanup_error'),
+            'queryParamsToClear' => array('upload', 'delete', 'bulk_delete', 'chunks_deleted', 'chunks_cleared', 'sitemap_debug', 'pages', 'found', 'queued', 'sitemap_saved', 'sitemap_refreshed', 'sitemap_file', 'sitemap_error', 'pdf_queued', 'pdf_error', 'config_imported', 'config_updated', 'config_processed', 'config_unchanged', 'config_skipped_sensitive', 'config_skipped_unknown', 'config_format', 'config_import_error', 'config_export_error', 'regression_ran', 'regression_cases', 'regression_pass', 'regression_fail', 'regression_error', 'cleanup_purged', 'cleanup_options', 'cleanup_dirs', 'cleanup_tables', 'cleanup_error'),
         ));
     }
 });
@@ -79,6 +79,14 @@ function octopus_ai_register_settings() {
     register_setting('octopus_ai_settings_group', 'octopus_ai_manual_priority_urls_fr', 'octopus_ai_sanitize_manual_url_list');
     register_setting('octopus_ai_settings_group', 'octopus_ai_sitemap_url', 'octopus_ai_sanitize_manual_url');
     register_setting('octopus_ai_settings_group', 'octopus_ai_provider_profile', 'octopus_ai_sanitize_provider_profile');
+    register_setting('octopus_ai_settings_group', 'octopus_ai_quality_gate_enabled', 'octopus_ai_sanitize_quality_gate_enabled');
+    register_setting('octopus_ai_settings_group', 'octopus_ai_quality_gate_min_pdf_coverage', 'octopus_ai_sanitize_quality_percent');
+    register_setting('octopus_ai_settings_group', 'octopus_ai_quality_gate_max_fallback_ratio', 'octopus_ai_sanitize_quality_percent');
+    register_setting('octopus_ai_settings_group', 'octopus_ai_quality_gate_max_stale_chunks', 'octopus_ai_sanitize_quality_max_stale_chunks');
+    register_setting('octopus_ai_settings_group', 'octopus_ai_quality_gate_min_sample_size', 'octopus_ai_sanitize_quality_min_sample_size');
+    register_setting('octopus_ai_settings_group', 'octopus_ai_quality_gate_min_regression_pass_rate', 'octopus_ai_sanitize_quality_percent');
+    register_setting('octopus_ai_settings_group', 'octopus_ai_quality_gate_max_regression_age_hours', 'octopus_ai_sanitize_quality_regression_age_hours');
+    register_setting('octopus_ai_settings_group', 'octopus_ai_quality_gate_min_regression_cases', 'octopus_ai_sanitize_quality_regression_min_cases');
 }
 
 add_action('admin_init', 'octopus_ai_migrate_legacy_welcome_message', 20);
@@ -296,7 +304,612 @@ function octopus_ai_get_exportable_option_names() {
         'octopus_ai_manual_priority_urls_fr',
         'octopus_ai_sitemap_url',
         'octopus_ai_provider_profile',
+        'octopus_ai_quality_gate_enabled',
+        'octopus_ai_quality_gate_min_pdf_coverage',
+        'octopus_ai_quality_gate_max_fallback_ratio',
+        'octopus_ai_quality_gate_max_stale_chunks',
+        'octopus_ai_quality_gate_min_sample_size',
+        'octopus_ai_quality_gate_min_regression_pass_rate',
+        'octopus_ai_quality_gate_max_regression_age_hours',
+        'octopus_ai_quality_gate_min_regression_cases',
     );
+}
+
+function octopus_ai_get_sensitive_exportable_option_names() {
+    return array(
+        'octopus_ai_api_key',
+    );
+}
+
+function octopus_ai_get_config_export_schema_version() {
+    return 2;
+}
+
+function octopus_ai_parse_checkbox_flag($value) {
+    if (is_bool($value)) {
+        return $value;
+    }
+
+    $value = strtolower(trim((string) $value));
+    return in_array($value, array('1', 'true', 'yes', 'on'), true);
+}
+
+function octopus_ai_sanitize_quality_gate_enabled($value) {
+    return octopus_ai_parse_checkbox_flag($value) ? 1 : 0;
+}
+
+function octopus_ai_sanitize_quality_percent($value) {
+    $value = is_numeric($value) ? (int) round((float) $value) : 0;
+    return max(0, min(100, $value));
+}
+
+function octopus_ai_sanitize_quality_max_stale_chunks($value) {
+    $value = is_numeric($value) ? (int) round((float) $value) : 0;
+    return max(0, min(200000, $value));
+}
+
+function octopus_ai_sanitize_quality_min_sample_size($value) {
+    $value = is_numeric($value) ? (int) round((float) $value) : 0;
+    return max(0, min(10000, $value));
+}
+
+function octopus_ai_sanitize_quality_regression_age_hours($value) {
+    $value = is_numeric($value) ? (int) round((float) $value) : 0;
+    return max(0, min(8760, $value));
+}
+
+function octopus_ai_sanitize_quality_regression_min_cases($value) {
+    $value = is_numeric($value) ? (int) round((float) $value) : 0;
+    return max(0, min(500, $value));
+}
+
+function octopus_ai_get_quality_gate_thresholds() {
+    return array(
+        'enabled' => ((int) get_option('octopus_ai_quality_gate_enabled', 1)) === 1,
+        'min_pdf_coverage' => octopus_ai_sanitize_quality_percent(get_option('octopus_ai_quality_gate_min_pdf_coverage', 70)),
+        'max_fallback_ratio' => octopus_ai_sanitize_quality_percent(get_option('octopus_ai_quality_gate_max_fallback_ratio', 35)),
+        'max_stale_chunks' => octopus_ai_sanitize_quality_max_stale_chunks(get_option('octopus_ai_quality_gate_max_stale_chunks', 250)),
+        'min_sample_size' => octopus_ai_sanitize_quality_min_sample_size(get_option('octopus_ai_quality_gate_min_sample_size', 50)),
+        'min_regression_pass_rate' => octopus_ai_sanitize_quality_percent(get_option('octopus_ai_quality_gate_min_regression_pass_rate', 75)),
+        'max_regression_age_hours' => octopus_ai_sanitize_quality_regression_age_hours(get_option('octopus_ai_quality_gate_max_regression_age_hours', 168)),
+        'min_regression_cases' => octopus_ai_sanitize_quality_regression_min_cases(get_option('octopus_ai_quality_gate_min_regression_cases', 6)),
+    );
+}
+
+if (!function_exists('octopus_ai_get_regression_snapshot')) {
+    function octopus_ai_get_regression_snapshot() {
+        $snapshot = get_option('octopus_ai_regression_snapshot', array());
+        if (!is_array($snapshot)) {
+            $snapshot = array();
+        }
+
+        $run_at_raw = sanitize_text_field((string) ($snapshot['run_at'] ?? ''));
+        $run_at_ts = $run_at_raw !== '' ? strtotime($run_at_raw) : 0;
+        if ($run_at_ts === false || $run_at_ts <= 0) {
+            $run_at_ts = 0;
+            $run_at_raw = '';
+        }
+
+        $total_cases = max(0, (int) ($snapshot['total_cases'] ?? 0));
+        $pass_cases = max(0, (int) ($snapshot['pass_cases'] ?? 0));
+        $fail_cases = max(0, (int) ($snapshot['fail_cases'] ?? 0));
+
+        if ($total_cases <= 0) {
+            $total_cases = $pass_cases + $fail_cases;
+        }
+        if ($total_cases < $pass_cases + $fail_cases) {
+            $total_cases = $pass_cases + $fail_cases;
+        }
+        if ($fail_cases <= 0 && $total_cases > $pass_cases) {
+            $fail_cases = $total_cases - $pass_cases;
+        }
+
+        $pass_rate = isset($snapshot['pass_rate']) && is_numeric($snapshot['pass_rate'])
+            ? (float) $snapshot['pass_rate']
+            : ($total_cases > 0 ? (($pass_cases / $total_cases) * 100.0) : 0.0);
+        $pass_rate = max(0.0, min(100.0, round($pass_rate, 1)));
+
+        $age_hours = 99999.0;
+        if ($run_at_ts > 0) {
+            $age_hours = max(0.0, round((time() - $run_at_ts) / HOUR_IN_SECONDS, 1));
+        }
+
+        $cases_raw = isset($snapshot['cases']) && is_array($snapshot['cases']) ? $snapshot['cases'] : array();
+        $cases = array();
+        foreach (array_slice($cases_raw, 0, 40) as $row) {
+            if (!is_array($row)) {
+                continue;
+            }
+            $cases[] = array(
+                'question' => sanitize_text_field((string) ($row['question'] ?? '')),
+                'expected_topic' => sanitize_key((string) ($row['expected_topic'] ?? '')),
+                'detected_topic' => sanitize_key((string) ($row['detected_topic'] ?? '')),
+                'context_length' => max(0, (int) ($row['context_length'] ?? 0)),
+                'score' => round((float) ($row['score'] ?? 0.0), 2),
+                'pass' => !empty($row['pass']) ? 1 : 0,
+            );
+        }
+
+        return array(
+            'run_at' => $run_at_raw,
+            'run_at_ts' => (int) $run_at_ts,
+            'age_hours' => (float) $age_hours,
+            'total_cases' => (int) $total_cases,
+            'pass_cases' => (int) $pass_cases,
+            'fail_cases' => (int) $fail_cases,
+            'pass_rate' => (float) $pass_rate,
+            'cases' => $cases,
+        );
+    }
+}
+
+if (!function_exists('octopus_ai_build_regression_suite_cases')) {
+    function octopus_ai_build_regression_suite_cases($max_cases = 12) {
+        $max_cases = max(2, min(30, (int) $max_cases));
+        $topic_terms_map = function_exists('octopus_ai_get_retriever_topic_terms_map')
+            ? octopus_ai_get_retriever_topic_terms_map()
+            : array();
+        $allowed_topics = function_exists('octopus_ai_get_provider_allowed_topics')
+            ? octopus_ai_get_provider_allowed_topics()
+            : array();
+        if (!is_array($allowed_topics) || empty($allowed_topics)) {
+            $allowed_topics = array_keys(is_array($topic_terms_map) ? $topic_terms_map : array());
+        }
+
+        $cases = array();
+        foreach ($allowed_topics as $topic_key) {
+            $topic_key = sanitize_key((string) $topic_key);
+            if ($topic_key === '') {
+                continue;
+            }
+
+            $label = function_exists('octopus_ai_get_topic_label')
+                ? octopus_ai_get_topic_label($topic_key, 'NL')
+                : ucfirst(str_replace('_', ' ', $topic_key));
+            $terms = isset($topic_terms_map[$topic_key]) && is_array($topic_terms_map[$topic_key])
+                ? $topic_terms_map[$topic_key]
+                : array();
+
+            $clean_terms = array();
+            foreach ($terms as $term) {
+                $term = sanitize_text_field((string) $term);
+                if ($term === '' || strlen($term) < 4 || in_array($term, $clean_terms, true)) {
+                    continue;
+                }
+                $clean_terms[] = $term;
+                if (count($clean_terms) >= 3) {
+                    break;
+                }
+            }
+
+            if (empty($clean_terms)) {
+                $clean_terms[] = $label;
+            }
+
+            foreach ($clean_terms as $term) {
+                $cases[] = array(
+                    'question' => 'Waar vind ik info over ' . $term . ' in ' . $label . '?',
+                    'expected_topic' => $topic_key,
+                );
+
+                if (count($cases) >= $max_cases) {
+                    break 2;
+                }
+            }
+        }
+
+        return $cases;
+    }
+}
+
+if (!function_exists('octopus_ai_detect_regression_topic_from_metadata')) {
+    function octopus_ai_detect_regression_topic_from_metadata($question, array $metadata_chunks) {
+        $topic_terms_map = function_exists('octopus_ai_get_retriever_topic_terms_map')
+            ? octopus_ai_get_retriever_topic_terms_map()
+            : array();
+        if (!is_array($topic_terms_map) || empty($topic_terms_map)) {
+            return array('topic' => '', 'score' => 0.0, 'scores' => array());
+        }
+
+        $blob_parts = array((string) $question);
+        foreach ($metadata_chunks as $chunk) {
+            if (!is_array($chunk)) {
+                continue;
+            }
+            $blob_parts[] = (string) ($chunk['section_title'] ?? '');
+            $blob_parts[] = (string) ($chunk['page_slug'] ?? '');
+            $blob_parts[] = (string) ($chunk['source_url'] ?? '');
+            $blob_parts[] = (string) ($chunk['manual_url'] ?? '');
+        }
+
+        $blob = function_exists('octopus_ai_normalize_search_text')
+            ? octopus_ai_normalize_search_text(implode(' ', $blob_parts))
+            : strtolower(implode(' ', $blob_parts));
+        if ($blob === '') {
+            return array('topic' => '', 'score' => 0.0, 'scores' => array());
+        }
+
+        $scores = array();
+        foreach ($topic_terms_map as $topic_key => $terms) {
+            $topic_key = sanitize_key((string) $topic_key);
+            if ($topic_key === '' || !is_array($terms)) {
+                continue;
+            }
+
+            $score = 0.0;
+            foreach ($terms as $term) {
+                $term_norm = function_exists('octopus_ai_normalize_search_text')
+                    ? octopus_ai_normalize_search_text((string) $term)
+                    : strtolower((string) $term);
+                if ($term_norm === '' || strlen($term_norm) < 3) {
+                    continue;
+                }
+                $hits = substr_count($blob, $term_norm);
+                if ($hits <= 0) {
+                    continue;
+                }
+                $score += min(4.0, (float) $hits);
+            }
+            $scores[$topic_key] = round($score, 2);
+        }
+
+        if (empty($scores)) {
+            return array('topic' => '', 'score' => 0.0, 'scores' => array());
+        }
+
+        arsort($scores);
+        $best_topic = sanitize_key((string) array_key_first($scores));
+        $best_score = isset($scores[$best_topic]) ? (float) $scores[$best_topic] : 0.0;
+
+        return array(
+            'topic' => $best_score > 0.0 ? $best_topic : '',
+            'score' => $best_score,
+            'scores' => $scores,
+        );
+    }
+}
+
+if (!function_exists('octopus_ai_run_regression_suite')) {
+    function octopus_ai_run_regression_suite() {
+        if (!function_exists('octopus_ai_retrieve_relevant_chunks')) {
+            return new WP_Error('octopus_ai_regression_missing_retriever', 'Regressiesuite niet beschikbaar: retriever ontbreekt.');
+        }
+
+        $cases = octopus_ai_build_regression_suite_cases(12);
+        if (empty($cases)) {
+            return new WP_Error('octopus_ai_regression_no_cases', 'Regressiesuite bevat geen testcases.');
+        }
+
+        $results = array();
+        $pass_cases = 0;
+        $total_cases = 0;
+
+        foreach ($cases as $case) {
+            $question = sanitize_text_field((string) ($case['question'] ?? ''));
+            $expected_topic = sanitize_key((string) ($case['expected_topic'] ?? ''));
+            if ($question === '' || $expected_topic === '') {
+                continue;
+            }
+
+            $retrieval = octopus_ai_retrieve_relevant_chunks($question, '');
+            $metadata_chunks = isset($retrieval['metadata']['chunks']) && is_array($retrieval['metadata']['chunks'])
+                ? $retrieval['metadata']['chunks']
+                : array();
+            $context_length = strlen((string) ($retrieval['context'] ?? ''));
+            $detected = octopus_ai_detect_regression_topic_from_metadata($question, $metadata_chunks);
+            $detected_topic = sanitize_key((string) ($detected['topic'] ?? ''));
+            $detected_score = (float) ($detected['score'] ?? 0.0);
+
+            $has_context = $context_length >= 80;
+            $is_topic_match = $detected_topic !== '' && $detected_topic === $expected_topic;
+            $pass = $has_context && $is_topic_match;
+
+            if ($pass) {
+                $pass_cases++;
+            }
+            $total_cases++;
+
+            $results[] = array(
+                'question' => $question,
+                'expected_topic' => $expected_topic,
+                'detected_topic' => $detected_topic,
+                'context_length' => $context_length,
+                'score' => round($detected_score, 2),
+                'pass' => $pass ? 1 : 0,
+            );
+        }
+
+        if ($total_cases <= 0) {
+            return new WP_Error('octopus_ai_regression_no_valid_cases', 'Geen geldige regressietests uitgevoerd.');
+        }
+
+        $fail_cases = max(0, $total_cases - $pass_cases);
+        $pass_rate = round(($pass_cases / $total_cases) * 100.0, 1);
+        $snapshot = array(
+            'run_at' => gmdate('c'),
+            'total_cases' => $total_cases,
+            'pass_cases' => $pass_cases,
+            'fail_cases' => $fail_cases,
+            'pass_rate' => $pass_rate,
+            'cases' => $results,
+        );
+
+        update_option('octopus_ai_regression_snapshot', $snapshot);
+        return $snapshot;
+    }
+}
+
+function octopus_ai_collect_quality_gate_metrics() {
+    $upload_dir = wp_upload_dir();
+    $upload_path = trailingslashit((string) ($upload_dir['basedir'] ?? '')) . 'octopus-chatbot/';
+    $chunk_dir = trailingslashit((string) ($upload_dir['basedir'] ?? '')) . 'octopus-ai-chunks/';
+
+    $source_strategy = sanitize_key((string) get_option('octopus_ai_source_strategy', 'manual_upload'));
+    $saved_sitemap_url = esc_url_raw((string) get_option('octopus_ai_sitemap_url', ''));
+
+    $pdf_files = file_exists($upload_path)
+        ? array_merge(glob($upload_path . '*.pdf') ?: array(), glob($upload_path . '*.PDF') ?: array())
+        : array();
+    $xml_files = file_exists($upload_path) ? (glob($upload_path . '*.xml') ?: array()) : array();
+    $pdf_chunk_files = file_exists($chunk_dir) ? (glob($chunk_dir . '*_chunk_*.json') ?: array()) : array();
+    $sitemap_chunk_files = file_exists($chunk_dir) ? (glob($chunk_dir . 'sitemap_*.json') ?: array()) : array();
+
+    $pdf_files = is_array($pdf_files) ? $pdf_files : array();
+    $xml_files = is_array($xml_files) ? $xml_files : array();
+    $pdf_chunk_files = is_array($pdf_chunk_files) ? $pdf_chunk_files : array();
+    $sitemap_chunk_files = is_array($sitemap_chunk_files) ? $sitemap_chunk_files : array();
+
+    $pdf_chunk_files = array_values(array_filter($pdf_chunk_files, static function($file) {
+        return strpos((string) basename((string) $file), 'sitemap_') !== 0;
+    }));
+    $all_chunk_files = array_values(array_merge($pdf_chunk_files, $sitemap_chunk_files));
+
+    $chunked_pdf_slugs = array();
+    foreach ($pdf_chunk_files as $chunk_file) {
+        $name = (string) basename((string) $chunk_file);
+        if (preg_match('/^(.+)_chunk_\d+\.json$/', $name, $matches)) {
+            $chunked_pdf_slugs[] = (string) $matches[1];
+        }
+    }
+    $chunked_pdf_slugs = array_values(array_unique($chunked_pdf_slugs));
+
+    $pdf_file_slugs = array();
+    foreach ($pdf_files as $pdf_file) {
+        $pdf_file_slugs[] = octopus_ai_pdf_filename_to_slug((string) basename((string) $pdf_file));
+    }
+    $pdf_file_slugs = array_values(array_unique($pdf_file_slugs));
+
+    $pdf_covered = 0;
+    foreach ($pdf_file_slugs as $slug) {
+        if (in_array($slug, $chunked_pdf_slugs, true)) {
+            $pdf_covered++;
+        }
+    }
+
+    $pdf_coverage_pct = count($pdf_file_slugs) > 0
+        ? round(($pdf_covered / count($pdf_file_slugs)) * 100, 1)
+        : 0.0;
+
+    $stale_threshold_days = 45;
+    $stale_cutoff = time() - ($stale_threshold_days * DAY_IN_SECONDS);
+    $stale_chunk_count = 0;
+    foreach ($all_chunk_files as $chunk_file) {
+        $modified = (int) @filemtime((string) $chunk_file);
+        if ($modified > 0 && $modified < $stale_cutoff) {
+            $stale_chunk_count++;
+        }
+    }
+
+    $fallback_metrics = octopus_ai_get_fallback_metrics_snapshot(300);
+    $regression_snapshot = octopus_ai_get_regression_snapshot();
+    $source_health = array(
+        'manual_upload' => (count($pdf_chunk_files) + count($sitemap_chunk_files)) > 0,
+        'sitemap_online' => (($saved_sitemap_url !== '' || count($xml_files) > 0) && count($sitemap_chunk_files) > 0),
+        'live_manual' => true,
+    );
+
+    return array(
+        'source_strategy' => $source_strategy,
+        'source_ready' => !empty($source_health[$source_strategy]) ? true : false,
+        'pdf_coverage_pct' => (float) $pdf_coverage_pct,
+        'pdf_file_count' => count($pdf_file_slugs),
+        'pdf_chunk_count' => count($pdf_chunk_files),
+        'sitemap_file_count' => count($xml_files),
+        'sitemap_chunk_count' => count($sitemap_chunk_files),
+        'stale_chunk_count' => (int) $stale_chunk_count,
+        'stale_threshold_days' => (int) $stale_threshold_days,
+        'fallback_ratio' => (float) ($fallback_metrics['overall_ratio'] ?? 0.0),
+        'fallback_sample_size' => (int) ($fallback_metrics['sample_size'] ?? 0),
+        'regression_pass_rate' => (float) ($regression_snapshot['pass_rate'] ?? 0.0),
+        'regression_total_cases' => (int) ($regression_snapshot['total_cases'] ?? 0),
+        'regression_fail_cases' => (int) ($regression_snapshot['fail_cases'] ?? 0),
+        'regression_age_hours' => (float) ($regression_snapshot['age_hours'] ?? 99999.0),
+        'regression_run_at' => (string) ($regression_snapshot['run_at'] ?? ''),
+    );
+}
+
+function octopus_ai_build_quality_gate_report($metrics = array()) {
+    $thresholds = octopus_ai_get_quality_gate_thresholds();
+    if (!is_array($metrics) || empty($metrics)) {
+        $metrics = octopus_ai_collect_quality_gate_metrics();
+    }
+
+    $source_strategy = sanitize_key((string) ($metrics['source_strategy'] ?? 'manual_upload'));
+    $source_labels = array(
+        'manual_upload' => 'Manueel uploaden',
+        'sitemap_online' => 'Online sitemap',
+        'live_manual' => 'Live handleiding',
+    );
+    $source_label = $source_labels[$source_strategy] ?? $source_strategy;
+
+    $checks = array();
+    $checks[] = array(
+        'key' => 'source_ready',
+        'label' => 'Actieve bron is operationeel',
+        'status' => !empty($metrics['source_ready']) ? 'pass' : 'fail',
+        'detail' => !empty($metrics['source_ready'])
+            ? 'Bron ' . $source_label . ' is klaar voor antwoordgeneratie.'
+            : 'Bron ' . $source_label . ' mist nog bruikbare data/chunks.',
+    );
+
+    $pdf_required = $source_strategy === 'manual_upload' && ((int) ($metrics['pdf_file_count'] ?? 0) > 0);
+    if ($pdf_required) {
+        $pdf_actual = (float) ($metrics['pdf_coverage_pct'] ?? 0.0);
+        $pdf_target = (int) ($thresholds['min_pdf_coverage'] ?? 70);
+        $checks[] = array(
+            'key' => 'pdf_coverage',
+            'label' => 'PDF-dekking',
+            'status' => $pdf_actual >= $pdf_target ? 'pass' : 'fail',
+            'detail' => 'Actueel: ' . $pdf_actual . '% (min: ' . $pdf_target . '%).',
+        );
+    } else {
+        $checks[] = array(
+            'key' => 'pdf_coverage',
+            'label' => 'PDF-dekking',
+            'status' => 'skip',
+            'detail' => 'Niet van toepassing voor de huidige bronstrategie.',
+        );
+    }
+
+    $chunks_required = in_array($source_strategy, array('manual_upload', 'sitemap_online'), true);
+    if ($chunks_required) {
+        $stale_actual = (int) ($metrics['stale_chunk_count'] ?? 0);
+        $stale_target = (int) ($thresholds['max_stale_chunks'] ?? 250);
+        $checks[] = array(
+            'key' => 'stale_chunks',
+            'label' => 'Stale chunks',
+            'status' => $stale_actual <= $stale_target ? 'pass' : 'fail',
+            'detail' => 'Actueel: ' . $stale_actual . ' (max: ' . $stale_target . ').',
+        );
+    } else {
+        $checks[] = array(
+            'key' => 'stale_chunks',
+            'label' => 'Stale chunks',
+            'status' => 'skip',
+            'detail' => 'Niet van toepassing voor live-only bronstrategie.',
+        );
+    }
+
+    $fallback_sample = (int) ($metrics['fallback_sample_size'] ?? 0);
+    $fallback_min_sample = (int) ($thresholds['min_sample_size'] ?? 50);
+    if ($fallback_sample >= $fallback_min_sample) {
+        $fallback_actual = (float) ($metrics['fallback_ratio'] ?? 0.0);
+        $fallback_target = (int) ($thresholds['max_fallback_ratio'] ?? 35);
+        $checks[] = array(
+            'key' => 'fallback_ratio',
+            'label' => 'Fallback ratio',
+            'status' => $fallback_actual <= $fallback_target ? 'pass' : 'fail',
+            'detail' => 'Actueel: ' . $fallback_actual . '% (max: ' . $fallback_target . '%) over ' . $fallback_sample . ' gesprekken.',
+        );
+    } else {
+        $checks[] = array(
+            'key' => 'fallback_ratio',
+            'label' => 'Fallback ratio',
+            'status' => 'skip',
+            'detail' => 'Nog onvoldoende data: ' . $fallback_sample . ' / ' . $fallback_min_sample . ' gesprekken.',
+        );
+    }
+
+    $regression_min_cases = (int) ($thresholds['min_regression_cases'] ?? 6);
+    $regression_target = (int) ($thresholds['min_regression_pass_rate'] ?? 75);
+    $regression_total = (int) ($metrics['regression_total_cases'] ?? 0);
+    $regression_rate = (float) ($metrics['regression_pass_rate'] ?? 0.0);
+    $regression_age_hours = (float) ($metrics['regression_age_hours'] ?? 99999.0);
+    $regression_max_age_hours = (int) ($thresholds['max_regression_age_hours'] ?? 168);
+    $regression_required = $source_strategy !== 'live_manual';
+
+    if (!$regression_required) {
+        $checks[] = array(
+            'key' => 'regression_suite',
+            'label' => 'Regressiescore',
+            'status' => 'skip',
+            'detail' => 'Niet van toepassing voor live-only bronstrategie.',
+        );
+    } elseif ($regression_min_cases <= 0) {
+        $checks[] = array(
+            'key' => 'regression_suite',
+            'label' => 'Regressiescore',
+            'status' => 'skip',
+            'detail' => 'Regressiecontrole is uitgeschakeld (minimum cases = 0).',
+        );
+    } elseif ($regression_total < $regression_min_cases) {
+        $checks[] = array(
+            'key' => 'regression_suite',
+            'label' => 'Regressiescore',
+            'status' => 'fail',
+            'detail' => 'Onvoldoende regressietests: ' . $regression_total . ' / ' . $regression_min_cases . '.',
+        );
+    } elseif ($regression_max_age_hours > 0 && $regression_age_hours > $regression_max_age_hours) {
+        $checks[] = array(
+            'key' => 'regression_suite',
+            'label' => 'Regressiescore',
+            'status' => 'fail',
+            'detail' => 'Laatste regressierun is te oud: ' . $regression_age_hours . 'u (max: ' . $regression_max_age_hours . 'u).',
+        );
+    } else {
+        $checks[] = array(
+            'key' => 'regression_suite',
+            'label' => 'Regressiescore',
+            'status' => $regression_rate >= $regression_target ? 'pass' : 'fail',
+            'detail' => 'Actueel: ' . $regression_rate . '% (min: ' . $regression_target . '%) over ' . $regression_total . ' cases.',
+        );
+    }
+
+    $failed_labels = array();
+    foreach ($checks as $check) {
+        if (($check['status'] ?? '') === 'fail') {
+            $failed_labels[] = (string) ($check['label'] ?? 'Check');
+        }
+    }
+
+    return array(
+        'enabled' => !empty($thresholds['enabled']),
+        'pass' => empty($failed_labels),
+        'checks' => $checks,
+        'failed_labels' => $failed_labels,
+        'thresholds' => $thresholds,
+        'metrics' => $metrics,
+    );
+}
+
+function octopus_ai_get_exportable_option_names_for_mode($include_sensitive = false) {
+    $all_option_names = octopus_ai_get_exportable_option_names();
+    if ($include_sensitive) {
+        return $all_option_names;
+    }
+
+    $sensitive = array_flip(octopus_ai_get_sensitive_exportable_option_names());
+    return array_values(array_filter($all_option_names, static function($option_name) use ($sensitive) {
+        return !isset($sensitive[$option_name]);
+    }));
+}
+
+function octopus_ai_build_config_export_payload($include_sensitive = false) {
+    $options = array();
+    foreach (octopus_ai_get_exportable_option_names_for_mode($include_sensitive) as $option_name) {
+        $options[$option_name] = get_option($option_name);
+    }
+
+    $payload = array(
+        'schema_version' => octopus_ai_get_config_export_schema_version(),
+        'generated_at' => gmdate('c'),
+        'plugin' => 'ai-chatbot',
+        'plugin_version' => defined('OCTOPUS_AI_VERSION') ? (string) OCTOPUS_AI_VERSION : '',
+        'includes_sensitive' => $include_sensitive ? 1 : 0,
+        'exported_from' => array(
+            'site_url' => esc_url_raw((string) home_url('/')),
+            'wordpress_version' => get_bloginfo('version'),
+            'php_version' => PHP_VERSION,
+        ),
+        'options' => $options,
+    );
+
+    $options_json = wp_json_encode($options);
+    if (is_string($options_json) && $options_json !== '' && function_exists('hash')) {
+        $payload['options_checksum_sha256'] = hash('sha256', $options_json);
+    }
+
+    return $payload;
 }
 
 add_action('admin_post_octopus_ai_export_config', 'octopus_ai_handle_config_export');
@@ -309,24 +922,38 @@ function octopus_ai_handle_config_export() {
         wp_die('Beveiligingsfout bij export.');
     }
 
-    $payload = array(
-        'generated_at' => gmdate('c'),
-        'plugin' => 'ai-chatbot',
-        'options' => array(),
-    );
+    $include_sensitive = octopus_ai_parse_checkbox_flag($_POST['octopus_ai_export_include_sensitive'] ?? '0');
 
-    foreach (octopus_ai_get_exportable_option_names() as $option_name) {
-        $payload['options'][$option_name] = get_option($option_name);
+    $quality_gate = function_exists('octopus_ai_build_quality_gate_report')
+        ? octopus_ai_build_quality_gate_report()
+        : array('enabled' => false, 'pass' => true, 'failed_labels' => array());
+    $quality_enabled = !empty($quality_gate['enabled']);
+    $quality_pass = !empty($quality_gate['pass']);
+
+    if ($quality_enabled && !$quality_pass) {
+        $failed_labels = isset($quality_gate['failed_labels']) && is_array($quality_gate['failed_labels'])
+            ? array_values(array_filter(array_map('sanitize_text_field', $quality_gate['failed_labels'])))
+            : array();
+        $reason = !empty($failed_labels)
+            ? implode(', ', $failed_labels)
+            : 'kwaliteitschecks niet gehaald';
+
+        octopus_ai_settings_admin_redirect(array(
+            'config_export_error' => 'Export geblokkeerd door quality gate: ' . $reason . '.',
+        ));
     }
+
+    $payload = octopus_ai_build_config_export_payload($include_sensitive);
 
     $json = wp_json_encode($payload, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
     if (!is_string($json) || $json === '') {
         wp_die('Export kon niet worden opgebouwd.');
     }
 
+    $suffix = $include_sensitive ? 'full' : 'deploy';
     nocache_headers();
     header('Content-Type: application/json; charset=utf-8');
-    header('Content-Disposition: attachment; filename="octopus-ai-config-' . gmdate('Ymd-His') . '.json"');
+    header('Content-Disposition: attachment; filename="octopus-ai-config-' . $suffix . '-' . gmdate('Ymd-His') . '.json"');
     echo $json;
     exit;
 }
@@ -367,12 +994,54 @@ function octopus_ai_handle_config_import() {
         ));
     }
 
+    $plugin_marker = sanitize_key((string) ($decoded['plugin'] ?? ''));
+    if ($plugin_marker !== '' && !in_array($plugin_marker, array('ai-chatbot', 'octopus-ai-chatbot', 'octopus_ai_chatbot'), true)) {
+        octopus_ai_settings_admin_redirect(array(
+            'config_import_error' => 'Dit configuratiebestand hoort niet bij deze plugin.',
+        ));
+    }
+
+    $schema_version = isset($decoded['schema_version']) ? (int) $decoded['schema_version'] : 1;
+    $supported_schema = octopus_ai_get_config_export_schema_version();
+    if ($schema_version > $supported_schema) {
+        octopus_ai_settings_admin_redirect(array(
+            'config_import_error' => 'Configuratieformaat is nieuwer dan deze pluginversie. Werk eerst de plugin bij.',
+        ));
+    }
+
+    if (isset($decoded['options_checksum_sha256']) && is_string($decoded['options_checksum_sha256'])) {
+        $expected_checksum = strtolower(trim((string) $decoded['options_checksum_sha256']));
+        $options_json = wp_json_encode($decoded['options']);
+        $actual_checksum = (is_string($options_json) && $options_json !== '' && function_exists('hash'))
+            ? hash('sha256', $options_json)
+            : '';
+
+        if ($expected_checksum !== '' && $actual_checksum !== '' && !hash_equals($expected_checksum, $actual_checksum)) {
+            octopus_ai_settings_admin_redirect(array(
+                'config_import_error' => 'Checksum mismatch: configuratiebestand lijkt gewijzigd of beschadigd.',
+            ));
+        }
+    }
+
     $allowed = array_flip(octopus_ai_get_exportable_option_names());
+    $sensitive = array_flip(octopus_ai_get_sensitive_exportable_option_names());
+    $import_sensitive = octopus_ai_parse_checkbox_flag($_POST['octopus_ai_import_api_key'] ?? '0');
+
     $updated = 0;
+    $processed = 0;
+    $unchanged = 0;
+    $skipped_sensitive = 0;
+    $skipped_unknown = 0;
 
     foreach ($decoded['options'] as $option_name => $option_value) {
         $option_name = sanitize_key((string) $option_name);
         if ($option_name === '' || !isset($allowed[$option_name])) {
+            $skipped_unknown++;
+            continue;
+        }
+
+        if (isset($sensitive[$option_name]) && !$import_sensitive) {
+            $skipped_sensitive++;
             continue;
         }
 
@@ -382,13 +1051,54 @@ function octopus_ai_handle_config_import() {
             $option_value = sanitize_option($option_name, $option_value);
         }
 
-        update_option($option_name, $option_value);
-        $updated++;
+        $processed++;
+        if (update_option($option_name, $option_value)) {
+            $updated++;
+        } else {
+            $unchanged++;
+        }
     }
 
     octopus_ai_settings_admin_redirect(array(
         'config_imported' => 1,
         'config_updated' => $updated,
+        'config_processed' => $processed,
+        'config_unchanged' => $unchanged,
+        'config_skipped_sensitive' => $skipped_sensitive,
+        'config_skipped_unknown' => $skipped_unknown,
+        'config_format' => $schema_version >= 2 ? 'v2' : 'legacy',
+    ));
+}
+
+add_action('admin_post_octopus_ai_run_regression_suite', 'octopus_ai_handle_run_regression_suite');
+function octopus_ai_handle_run_regression_suite() {
+    $nonce_value = '';
+    if (isset($_REQUEST['octopus_ai_regression_nonce'])) {
+        $nonce_value = (string) wp_unslash($_REQUEST['octopus_ai_regression_nonce']);
+    } elseif (isset($_REQUEST['_wpnonce'])) {
+        $nonce_value = (string) wp_unslash($_REQUEST['_wpnonce']);
+    }
+
+    if (
+        !current_user_can('manage_options') ||
+        $nonce_value === '' ||
+        !wp_verify_nonce($nonce_value, 'octopus_ai_run_regression_suite')
+    ) {
+        wp_die('Beveiligingsfout bij regressiesuite.');
+    }
+
+    $snapshot = octopus_ai_run_regression_suite();
+    if (is_wp_error($snapshot)) {
+        octopus_ai_settings_admin_redirect(array(
+            'regression_error' => $snapshot->get_error_message(),
+        ));
+    }
+
+    octopus_ai_settings_admin_redirect(array(
+        'regression_ran' => 1,
+        'regression_cases' => (int) ($snapshot['total_cases'] ?? 0),
+        'regression_pass' => (int) ($snapshot['pass_cases'] ?? 0),
+        'regression_fail' => (int) ($snapshot['fail_cases'] ?? 0),
     ));
 }
 
@@ -499,10 +1209,13 @@ function octopus_ai_get_fallback_metrics_snapshot($sample_size = 250) {
     }
 
     $profile = function_exists('octopus_ai_get_provider_profile') ? octopus_ai_get_provider_profile() : array();
-    $topic_terms = isset($profile['topic_terms']) && is_array($profile['topic_terms']) ? $profile['topic_terms'] : array(
-        'klantenportaal' => array('klantenportaal', 'portal', 'portail', 'klant', 'client', 'factuur', 'betaling'),
-        'boekhoudprogramma' => array('boekhoud', 'compta', 'btw', 'tva', 'journaal', 'rapport'),
-    );
+    $provider_defaults = function_exists('octopus_ai_get_default_provider_profile')
+        ? octopus_ai_get_default_provider_profile()
+        : array();
+    $topic_terms = isset($profile['topic_terms']) && is_array($profile['topic_terms']) ? $profile['topic_terms'] : array();
+    if (empty($topic_terms) && isset($provider_defaults['topic_terms']) && is_array($provider_defaults['topic_terms'])) {
+        $topic_terms = $provider_defaults['topic_terms'];
+    }
 
     $total = 0;
     $fallback = 0;
@@ -1257,6 +1970,34 @@ function octopus_ai_settings_page() {
     $manual_base_fr = get_option('octopus_ai_manual_base_url_fr', '');
     $manual_priority_nl = get_option('octopus_ai_manual_priority_urls_nl', '');
     $manual_priority_fr = get_option('octopus_ai_manual_priority_urls_fr', '');
+    $manual_placeholder_nl = function_exists('octopus_ai_get_provider_manual_base_url')
+        ? trim((string) octopus_ai_get_provider_manual_base_url('NL'))
+        : '';
+    $manual_placeholder_fr = function_exists('octopus_ai_get_provider_manual_base_url')
+        ? trim((string) octopus_ai_get_provider_manual_base_url('FR'))
+        : '';
+    if ($manual_placeholder_nl === '' || $manual_placeholder_fr === '') {
+        $provider_defaults = function_exists('octopus_ai_get_default_provider_profile')
+            ? octopus_ai_get_default_provider_profile()
+            : array();
+        $default_manual = isset($provider_defaults['manual']) && is_array($provider_defaults['manual'])
+            ? $provider_defaults['manual']
+            : array();
+        if ($manual_placeholder_nl === '') {
+            $manual_placeholder_nl = trim((string) ($default_manual['base_url_nl'] ?? ''));
+        }
+        if ($manual_placeholder_fr === '') {
+            $manual_placeholder_fr = trim((string) ($default_manual['base_url_fr'] ?? ''));
+        }
+    }
+    if ($manual_placeholder_nl === '') {
+        $manual_placeholder_nl = 'https://example.com/manual/nl/';
+    }
+    if ($manual_placeholder_fr === '') {
+        $manual_placeholder_fr = 'https://example.com/manual/fr/';
+    }
+    $manual_priority_placeholder_nl = trailingslashit($manual_placeholder_nl) . 'voorbeeld.htm' . "\n" . trailingslashit($manual_placeholder_nl) . 'andere-pagina.htm';
+    $manual_priority_placeholder_fr = trailingslashit($manual_placeholder_fr) . 'exemple.htm';
     $confidence_threshold = get_option('octopus_ai_confidence_threshold', 55);
     $handoff_url_nl = get_option('octopus_ai_handoff_url_nl', '');
     $handoff_url_fr = get_option('octopus_ai_handoff_url_fr', '');
@@ -1345,11 +2086,25 @@ function octopus_ai_settings_page() {
     }
 
     $fallback_metrics = octopus_ai_get_fallback_metrics_snapshot(300);
-    $fallback_topic_labels = array(
-        'klantenportaal' => 'Klantenportaal',
-        'boekhoudprogramma' => 'Boekhoudprogramma',
-        'unknown' => 'Overig/onbekend',
-    );
+    $regression_snapshot = octopus_ai_get_regression_snapshot();
+    $fallback_topic_labels = array();
+    if (function_exists('octopus_ai_get_provider_topic_labels_map')) {
+        $topic_labels_map = octopus_ai_get_provider_topic_labels_map();
+        if (is_array($topic_labels_map)) {
+            foreach ($topic_labels_map as $topic_key => $label_pair) {
+                $topic_key = sanitize_key((string) $topic_key);
+                if ($topic_key === '' || !is_array($label_pair)) {
+                    continue;
+                }
+
+                $label_nl = sanitize_text_field((string) ($label_pair['nl'] ?? ''));
+                $fallback_topic_labels[$topic_key] = $label_nl !== ''
+                    ? $label_nl
+                    : ucfirst(str_replace('_', ' ', $topic_key));
+            }
+        }
+    }
+    $fallback_topic_labels['unknown'] = 'Overig/onbekend';
 
     $source_health = array(
         'manual_upload' => array(
@@ -1387,7 +2142,41 @@ function octopus_ai_settings_page() {
             'value' => (string) ($fallback_metrics['overall_ratio'] ?? 0.0) . '%',
             'detail' => 'Over laatste ' . (int) ($fallback_metrics['sample_size'] ?? 0) . ' gesprekken.',
         ),
+        array(
+            'title' => 'Regressiescore',
+            'value' => (string) ($regression_snapshot['pass_rate'] ?? 0.0) . '%',
+            'detail' => 'Laatste run: ' . (int) ($regression_snapshot['total_cases'] ?? 0) . ' cases, leeftijd ' . (float) ($regression_snapshot['age_hours'] ?? 0.0) . ' uur.',
+        ),
     );
+
+    $quality_gate_thresholds = octopus_ai_get_quality_gate_thresholds();
+    $quality_gate_enabled = !empty($quality_gate_thresholds['enabled']) ? 1 : 0;
+
+    $quality_gate_metrics = array(
+        'source_strategy' => sanitize_key((string) $source_strategy),
+        'source_ready' => !empty($source_health[$source_strategy]['ready']),
+        'pdf_coverage_pct' => (float) $pdf_coverage_pct,
+        'pdf_file_count' => count($pdf_file_slugs),
+        'pdf_chunk_count' => count($pdf_chunk_files),
+        'sitemap_file_count' => count($xml_files),
+        'sitemap_chunk_count' => count($sitemap_chunk_files),
+        'stale_chunk_count' => (int) $stale_chunk_count,
+        'stale_threshold_days' => (int) $stale_threshold_days,
+        'fallback_ratio' => (float) ($fallback_metrics['overall_ratio'] ?? 0.0),
+        'fallback_sample_size' => (int) ($fallback_metrics['sample_size'] ?? 0),
+        'regression_pass_rate' => (float) ($regression_snapshot['pass_rate'] ?? 0.0),
+        'regression_total_cases' => (int) ($regression_snapshot['total_cases'] ?? 0),
+        'regression_fail_cases' => (int) ($regression_snapshot['fail_cases'] ?? 0),
+        'regression_age_hours' => (float) ($regression_snapshot['age_hours'] ?? 99999.0),
+        'regression_run_at' => (string) ($regression_snapshot['run_at'] ?? ''),
+    );
+    $quality_gate_report = octopus_ai_build_quality_gate_report($quality_gate_metrics);
+    $quality_gate_checks = isset($quality_gate_report['checks']) && is_array($quality_gate_report['checks'])
+        ? $quality_gate_report['checks']
+        : array();
+    $quality_gate_failed = isset($quality_gate_report['failed_labels']) && is_array($quality_gate_report['failed_labels'])
+        ? $quality_gate_report['failed_labels']
+        : array();
 
     ?>
     <div class="wrap octopus-settings">
@@ -1450,11 +2239,56 @@ function octopus_ai_settings_page() {
         <?php endif; ?>
 
         <?php if (isset($_GET['config_imported']) && intval($_GET['config_imported']) === 1) : ?>
-            <div class="notice notice-success is-dismissible"><p>Configuratie geimporteerd. Bijgewerkte instellingen: <?php echo intval($_GET['config_updated'] ?? 0); ?>.</p></div>
+            <?php
+            $config_updated = intval($_GET['config_updated'] ?? 0);
+            $config_processed = intval($_GET['config_processed'] ?? 0);
+            $config_unchanged = intval($_GET['config_unchanged'] ?? 0);
+            $config_skipped_sensitive = intval($_GET['config_skipped_sensitive'] ?? 0);
+            $config_skipped_unknown = intval($_GET['config_skipped_unknown'] ?? 0);
+            $config_format = sanitize_key((string) ($_GET['config_format'] ?? ''));
+            ?>
+            <div class="notice notice-success is-dismissible">
+                <p>
+                    Configuratie geimporteerd.
+                    Bijgewerkt: <?php echo $config_updated; ?>,
+                    verwerkt: <?php echo $config_processed; ?>,
+                    ongewijzigd: <?php echo $config_unchanged; ?>.
+                    <?php if ($config_skipped_sensitive > 0) : ?>
+                        Gevoelige opties overgeslagen: <?php echo $config_skipped_sensitive; ?>.
+                    <?php endif; ?>
+                    <?php if ($config_skipped_unknown > 0) : ?>
+                        Onbekende sleutels overgeslagen: <?php echo $config_skipped_unknown; ?>.
+                    <?php endif; ?>
+                </p>
+            </div>
+            <?php if ($config_format === 'legacy') : ?>
+                <div class="notice notice-warning is-dismissible">
+                    <p>Legacy configuratieformaat geimporteerd. Exporteer opnieuw in het nieuwe formaat voor toekomstige deployments.</p>
+                </div>
+            <?php endif; ?>
         <?php endif; ?>
 
         <?php if (isset($_GET['config_import_error']) && $_GET['config_import_error'] !== '') : ?>
             <div class="notice notice-error is-dismissible"><p><?php echo esc_html(sanitize_text_field((string) wp_unslash($_GET['config_import_error']))); ?></p></div>
+        <?php endif; ?>
+
+        <?php if (isset($_GET['config_export_error']) && $_GET['config_export_error'] !== '') : ?>
+            <div class="notice notice-error is-dismissible"><p><?php echo esc_html(sanitize_text_field((string) wp_unslash($_GET['config_export_error']))); ?></p></div>
+        <?php endif; ?>
+
+        <?php if (isset($_GET['regression_ran']) && intval($_GET['regression_ran']) === 1) : ?>
+            <div class="notice notice-success is-dismissible">
+                <p>
+                    Regressiesuite uitgevoerd.
+                    Cases: <?php echo intval($_GET['regression_cases'] ?? 0); ?>,
+                    PASS: <?php echo intval($_GET['regression_pass'] ?? 0); ?>,
+                    FAIL: <?php echo intval($_GET['regression_fail'] ?? 0); ?>.
+                </p>
+            </div>
+        <?php endif; ?>
+
+        <?php if (isset($_GET['regression_error']) && $_GET['regression_error'] !== '') : ?>
+            <div class="notice notice-error is-dismissible"><p><?php echo esc_html(sanitize_text_field((string) wp_unslash($_GET['regression_error']))); ?></p></div>
         <?php endif; ?>
 
         <?php if (isset($_GET['cleanup_purged']) && intval($_GET['cleanup_purged']) === 1) : ?>
@@ -1672,6 +2506,75 @@ function octopus_ai_settings_page() {
                 <?php endforeach; ?>
             </div>
 
+            <h3 class="octopus-quality-title">Quality gate</h3>
+            <div class="source-health-grid source-health-secondary octopus-quality-grid">
+                <div class="source-health-card <?php echo (!empty($quality_gate_report['enabled']) && empty($quality_gate_report['pass'])) ? 'is-fail' : 'is-ready'; ?>">
+                    <div class="source-health-header">
+                        <span class="source-health-dot" aria-hidden="true"></span>
+                        <span>Deployment gate</span>
+                        <small>
+                            <?php
+                            if (empty($quality_gate_report['enabled'])) {
+                                echo 'UIT';
+                            } elseif (!empty($quality_gate_report['pass'])) {
+                                echo 'PASS';
+                            } else {
+                                echo 'FAIL';
+                            }
+                            ?>
+                        </small>
+                    </div>
+                    <p class="source-health-meta">
+                        <?php if (empty($quality_gate_report['enabled'])) : ?>
+                            Quality gate is uitgeschakeld. Exports worden niet geblokkeerd.
+                        <?php elseif (!empty($quality_gate_report['pass'])) : ?>
+                            Alle vereiste kwaliteitschecks zijn gehaald.
+                        <?php else : ?>
+                            Export wordt geblokkeerd tot de failing checks opgelost zijn.
+                        <?php endif; ?>
+                    </p>
+                </div>
+            </div>
+
+            <?php if (!empty($quality_gate_checks)) : ?>
+                <table class="widefat striped octopus-quality-table">
+                    <thead>
+                        <tr>
+                            <th>Check</th>
+                            <th>Status</th>
+                            <th>Detail</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <?php foreach ($quality_gate_checks as $check) : ?>
+                            <?php
+                            $status = sanitize_key((string) ($check['status'] ?? 'skip'));
+                            if ($status === 'pass') {
+                                $status_label = 'PASS';
+                            } elseif ($status === 'fail') {
+                                $status_label = 'FAIL';
+                            } else {
+                                $status_label = 'SKIP';
+                            }
+                            ?>
+                            <tr>
+                                <td><?php echo esc_html((string) ($check['label'] ?? 'Check')); ?></td>
+                                <td><?php echo esc_html($status_label); ?></td>
+                                <td><?php echo esc_html((string) ($check['detail'] ?? '')); ?></td>
+                            </tr>
+                        <?php endforeach; ?>
+                    </tbody>
+                </table>
+            <?php endif; ?>
+
+            <?php if (!empty($quality_gate_report['enabled']) && !empty($quality_gate_failed)) : ?>
+                <div class="octopus-quality-alerts">
+                    <div class="octopus-quality-alert octopus-quality-alert-critical">
+                        Gate faalt op: <?php echo esc_html(implode(', ', array_map('sanitize_text_field', $quality_gate_failed))); ?>.
+                    </div>
+                </div>
+            <?php endif; ?>
+
             <?php if (!empty($fallback_metrics['per_topic'])): ?>
                 <table class="widefat striped octopus-fallback-table">
                     <thead>
@@ -1695,33 +2598,116 @@ function octopus_ai_settings_page() {
 
             <p class="description" style="margin-top:10px;">Tip: kies de bron hierboven, klik op <strong>Instellingen opslaan</strong>, en laad daarna data in onder de panelen hieronder.</p>
 
+            <h2 style="margin-top:35px;">Kwaliteitsgate (deployment)</h2>
+            <table class="form-table">
+                <tr>
+                    <th>Gate actief</th>
+                    <td>
+                        <input type="hidden" name="octopus_ai_quality_gate_enabled" value="0">
+                        <label>
+                            <input type="checkbox" name="octopus_ai_quality_gate_enabled" value="1" <?php checked($quality_gate_enabled, 1); ?>>
+                            Blokkeer configuratie-export als kwaliteitsdrempels niet gehaald worden
+                        </label>
+                    </td>
+                </tr>
+                <tr>
+                    <th>Min PDF dekking (%)</th>
+                    <td>
+                        <input type="number" name="octopus_ai_quality_gate_min_pdf_coverage" min="0" max="100" step="1" value="<?php echo esc_attr((string) ($quality_gate_thresholds['min_pdf_coverage'] ?? 70)); ?>" style="width: 120px;">
+                        <p class="description">Enkel van toepassing in manuele upload-modus wanneer er PDF-bestanden zijn.</p>
+                    </td>
+                </tr>
+                <tr>
+                    <th>Max fallback ratio (%)</th>
+                    <td>
+                        <input type="number" name="octopus_ai_quality_gate_max_fallback_ratio" min="0" max="100" step="1" value="<?php echo esc_attr((string) ($quality_gate_thresholds['max_fallback_ratio'] ?? 35)); ?>" style="width: 120px;">
+                        <p class="description">Pas gevalideerd wanneer minstens genoeg samplegesprekken beschikbaar zijn.</p>
+                    </td>
+                </tr>
+                <tr>
+                    <th>Max stale chunks</th>
+                    <td>
+                        <input type="number" name="octopus_ai_quality_gate_max_stale_chunks" min="0" max="200000" step="1" value="<?php echo esc_attr((string) ($quality_gate_thresholds['max_stale_chunks'] ?? 250)); ?>" style="width: 120px;">
+                        <p class="description">Chunks ouder dan 45 dagen tellen als stale.</p>
+                    </td>
+                </tr>
+                <tr>
+                    <th>Min sample fallback</th>
+                    <td>
+                        <input type="number" name="octopus_ai_quality_gate_min_sample_size" min="0" max="10000" step="1" value="<?php echo esc_attr((string) ($quality_gate_thresholds['min_sample_size'] ?? 50)); ?>" style="width: 120px;">
+                        <p class="description">Minimum aantal gesprekken voor fallback-ratio validatie.</p>
+                    </td>
+                </tr>
+                <tr>
+                    <th>Min regressie PASS (%)</th>
+                    <td>
+                        <input type="number" name="octopus_ai_quality_gate_min_regression_pass_rate" min="0" max="100" step="1" value="<?php echo esc_attr((string) ($quality_gate_thresholds['min_regression_pass_rate'] ?? 75)); ?>" style="width: 120px;">
+                        <p class="description">Minimale PASS-score van de automatische regressiesuite.</p>
+                    </td>
+                </tr>
+                <tr>
+                    <th>Min regressie cases</th>
+                    <td>
+                        <input type="number" name="octopus_ai_quality_gate_min_regression_cases" min="0" max="500" step="1" value="<?php echo esc_attr((string) ($quality_gate_thresholds['min_regression_cases'] ?? 6)); ?>" style="width: 120px;">
+                        <p class="description">Minimum aantal cases in de laatste regressierun (0 = check uit).</p>
+                    </td>
+                </tr>
+                <tr>
+                    <th>Max leeftijd regressie (uur)</th>
+                    <td>
+                        <input type="number" name="octopus_ai_quality_gate_max_regression_age_hours" min="0" max="8760" step="1" value="<?php echo esc_attr((string) ($quality_gate_thresholds['max_regression_age_hours'] ?? 168)); ?>" style="width: 120px;">
+                        <p class="description">Hoe oud de laatste regressierun maximaal mag zijn (0 = ouderdom niet controleren).</p>
+                    </td>
+                </tr>
+            </table>
+            <p style="margin:8px 0 14px;">
+                <strong>Laatste regressierun:</strong>
+                <?php if (!empty($regression_snapshot['run_at'])) : ?>
+                    <?php echo esc_html((string) $regression_snapshot['run_at']); ?> |
+                    PASS <?php echo esc_html((string) ($regression_snapshot['pass_rate'] ?? 0.0)); ?>% |
+                    <?php echo esc_html((string) ($regression_snapshot['total_cases'] ?? 0)); ?> cases
+                <?php else : ?>
+                    Nog niet uitgevoerd.
+                <?php endif; ?>
+            </p>
+            <?php
+            $regression_run_url = wp_nonce_url(
+                admin_url('admin-post.php?action=octopus_ai_run_regression_suite'),
+                'octopus_ai_run_regression_suite',
+                'octopus_ai_regression_nonce'
+            );
+            ?>
+            <p style="margin:0 0 10px;">
+                <a class="button button-secondary" href="<?php echo esc_url($regression_run_url); ?>">Draai regressiesuite nu</a>
+            </p>
+
             <h2 style="margin-top:35px;">Handleiding en voorkeuren</h2>
             <table class="form-table">
                 <tr>
                     <th>Basis URL NL</th>
                     <td>
-                        <input type="url" name="octopus_ai_manual_base_url_nl" value="<?php echo esc_attr($manual_base_nl); ?>" placeholder="https://login.octopus.be/manual/NL/" />
+                        <input type="url" name="octopus_ai_manual_base_url_nl" value="<?php echo esc_attr($manual_base_nl); ?>" placeholder="<?php echo esc_attr($manual_placeholder_nl); ?>" />
                         <p class="description">Optioneel: wijzig de basis van de Nederlandstalige handleiding indien je een andere omgeving gebruikt. Laat leeg voor de standaard Octopus URL.</p>
                     </td>
                 </tr>
                 <tr>
                     <th>Basis URL FR</th>
                     <td>
-                        <input type="url" name="octopus_ai_manual_base_url_fr" value="<?php echo esc_attr($manual_base_fr); ?>" placeholder="https://login.octopus.be/manual/FR/" />
+                        <input type="url" name="octopus_ai_manual_base_url_fr" value="<?php echo esc_attr($manual_base_fr); ?>" placeholder="<?php echo esc_attr($manual_placeholder_fr); ?>" />
                         <p class="description">Optioneel: wijzig de basis van de Franstalige handleiding indien nodig.</p>
                     </td>
                 </tr>
                 <tr>
                     <th>Voorkeurspagina's NL</th>
                     <td>
-                        <textarea name="octopus_ai_manual_priority_urls_nl" rows="3" placeholder="https://login.octopus.be/manual/NL/voorbeeld.htm&#10;https://login.octopus.be/manual/NL/andere-pagina.htm"><?php echo esc_textarea($manual_priority_nl); ?></textarea>
+                        <textarea name="octopus_ai_manual_priority_urls_nl" rows="3" placeholder="<?php echo esc_attr($manual_priority_placeholder_nl); ?>"><?php echo esc_textarea($manual_priority_nl); ?></textarea>
                         <p class="description">Geef één of meerdere URL's op (één per lijn) die eerst live opgehaald mogen worden wanneer de chatbot de handleiding raadpleegt.</p>
                     </td>
                 </tr>
                 <tr>
                     <th>Voorkeurspagina's FR</th>
                     <td>
-                        <textarea name="octopus_ai_manual_priority_urls_fr" rows="3" placeholder="https://login.octopus.be/manual/FR/exemple.htm"><?php echo esc_textarea($manual_priority_fr); ?></textarea>
+                        <textarea name="octopus_ai_manual_priority_urls_fr" rows="3" placeholder="<?php echo esc_attr($manual_priority_placeholder_fr); ?>"><?php echo esc_textarea($manual_priority_fr); ?></textarea>
                         <p class="description">Worden gebruikt voor Franstalige sessies. Laat leeg om enkel de metadata van chunks te volgen.</p>
                     </td>
                 </tr>
@@ -1853,18 +2839,32 @@ function octopus_ai_settings_page() {
 
         <div class="upload-box octopus-config-box">
             <h3>Configuratie export/import</h3>
-            <p class="section-description">Export naar JSON voor hergebruik bij andere klanten, of importeer een bestaande profielconfiguratie.</p>
+            <p class="section-description">Deployment-flow zonder nieuwe database: exporteer een herbruikbaar JSON-profiel, of importeer een bestaand profiel. Standaard gebeurt export zonder API key. Als de quality gate actief is, wordt export geblokkeerd bij FAIL.</p>
             <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" style="margin-bottom:12px;">
                 <?php wp_nonce_field('octopus_ai_export_config', 'octopus_ai_export_nonce'); ?>
                 <input type="hidden" name="action" value="octopus_ai_export_config">
-                <?php submit_button('Exporteer configuratie (JSON)', 'secondary', '', false); ?>
+                <input type="hidden" name="octopus_ai_export_include_sensitive" value="0">
+                <?php submit_button('Exporteer deployment-config (zonder API key)', 'secondary', '', false); ?>
+            </form>
+            <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" style="margin-bottom:12px;">
+                <?php wp_nonce_field('octopus_ai_export_config', 'octopus_ai_export_nonce'); ?>
+                <input type="hidden" name="action" value="octopus_ai_export_config">
+                <input type="hidden" name="octopus_ai_export_include_sensitive" value="1">
+                <?php submit_button('Exporteer volledige backup (met API key)', 'secondary', '', false); ?>
             </form>
             <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" enctype="multipart/form-data">
                 <?php wp_nonce_field('octopus_ai_import_config', 'octopus_ai_import_nonce'); ?>
                 <input type="hidden" name="action" value="octopus_ai_import_config">
                 <input type="file" name="octopus_ai_config_file" accept="application/json,.json" required>
+                <p style="margin:8px 0 12px;">
+                    <label>
+                        <input type="checkbox" name="octopus_ai_import_api_key" value="1">
+                        API key mee importeren indien aanwezig in het bestand
+                    </label>
+                </p>
                 <?php submit_button('Importeer configuratie', 'secondary', '', false); ?>
             </form>
+            <p class="description" style="margin-top:8px;">Formaat: versie 2 met checksum-validatie. Oudere exports blijven compatibel.</p>
         </div>
 
         <div class="upload-box octopus-cleanup-box">
