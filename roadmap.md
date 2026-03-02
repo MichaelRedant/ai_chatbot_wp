@@ -75,7 +75,7 @@ Dit plan houdt expliciet rekening met de beperking: **geen nieuwe database/tabel
 
 1. [x] Quality gate op export: blokkeer config-export bij kritieke kwaliteitsfouten.
 2. [x] Automatische regressiescore koppelen aan quality gate (minimum PASS%).
-3. [ ] Release checklist + semver changelog automatiseren.
+3. [x] Release checklist + semver changelog automatiseren.
 
 ## Werkafspraken
 

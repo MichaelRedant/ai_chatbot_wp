@@ -1534,6 +1534,44 @@ if (!function_exists('octopus_ai_discover_live_manual_urls')) {
  * @param string $url
  * @return array{status:int, body:string, error:string, duration:float}
  */
+if (!function_exists('octopus_ai_is_manual_error_page')) {
+    function octopus_ai_is_manual_error_page($html)
+    {
+        $html = (string) $html;
+        if ($html === '') {
+            return false;
+        }
+
+        $text = wp_strip_all_tags($html, true);
+        $text = html_entity_decode($text, ENT_QUOTES | ENT_HTML5, 'UTF-8');
+        $text = strtolower(trim((string) $text));
+
+        if ($text === '') {
+            return false;
+        }
+
+        $markers = array(
+            'er heeft zich een kritieke fout voorgedaan op deze website',
+            'there has been a critical error on this website',
+            'faq-troubleshooting',
+            'wordpress.org/documentation/article/faq-troubleshooting',
+            'wp-die-message',
+        );
+
+        foreach ($markers as $marker) {
+            if (strpos($text, $marker) !== false) {
+                return true;
+            }
+        }
+
+        if (strpos($text, 'wordpress') !== false && strpos($text, 'critical error') !== false) {
+            return true;
+        }
+
+        return false;
+    }
+}
+
 function octopus_ai_download_manual_page($url)
 {
     $cache_key = 'octopus_ai_manual_' . md5($url);
@@ -1581,9 +1619,21 @@ function octopus_ai_download_manual_page($url)
         $error = wp_remote_retrieve_response_message($response);
     }
 
+    $body_text = ($status === 200 && is_string($body)) ? $body : '';
+    if ($body_text !== '' && octopus_ai_is_manual_error_page($body_text)) {
+        $result = [
+            'status'   => 520,
+            'body'     => '',
+            'error'    => 'Gedetecteerde WordPress-foutpagina',
+            'duration' => $duration,
+        ];
+        set_transient($cache_key, $result, 15 * MINUTE_IN_SECONDS);
+        return $result;
+    }
+
     $result = [
         'status'   => $status,
-        'body'     => ($status === 200 && is_string($body)) ? $body : '',
+        'body'     => $body_text,
         'error'    => $error,
         'duration' => $duration,
     ];
@@ -1602,6 +1652,10 @@ function octopus_ai_download_manual_page($url)
  */
 function octopus_ai_normalize_manual_text($html)
 {
+    if (octopus_ai_is_manual_error_page($html)) {
+        return '';
+    }
+
     $text = wp_strip_all_tags($html, true);
     $text = html_entity_decode($text, ENT_QUOTES | ENT_HTML5, 'UTF-8');
     $text = preg_replace('/\s+/', ' ', $text);

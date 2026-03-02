@@ -50,6 +50,27 @@ document.addEventListener('DOMContentLoaded', function () {
     }
   }
 
+  function isCriticalHtmlPayload(raw) {
+    const text = String(raw || '').trim();
+    if (!text) return false;
+
+    const lower = text.toLowerCase();
+    const markers = [
+      'er heeft zich een kritieke fout voorgedaan op deze website',
+      'there has been a critical error on this website',
+      'faq-troubleshooting',
+      'wordpress.org/documentation/article/faq-troubleshooting',
+      'wp-die-message'
+    ];
+
+    if (markers.some((marker) => lower.indexOf(marker) !== -1)) {
+      return true;
+    }
+
+    const hasHtml = /<\s*(html|body|p|a|div|h1|h2)\b/i.test(text);
+    return hasHtml && lower.indexOf('wordpress') !== -1 && lower.indexOf('critical error') !== -1;
+  }
+
   function decodeUnicode(value) {
     return String(value || '')
       .replace(/\\\\\//g, '/')
@@ -135,6 +156,7 @@ document.addEventListener('DOMContentLoaded', function () {
     };
 
     if (!fallbackText) return payload;
+    if (isCriticalHtmlPayload(fallbackText)) return payload;
 
     try {
       const parsed = JSON.parse(fallbackText);
@@ -168,7 +190,7 @@ document.addEventListener('DOMContentLoaded', function () {
       // keep raw fallback text
     }
 
-    payload.answer = fallbackText;
+    payload.answer = isCriticalHtmlPayload(fallbackText) ? '' : fallbackText;
     return payload;
   }
 
@@ -1407,6 +1429,9 @@ document.addEventListener('DOMContentLoaded', function () {
       });
 
       const raw = await response.text();
+      if (!response.ok || isCriticalHtmlPayload(raw)) {
+        throw new Error('runtime_html_error');
+      }
       return parseBotPayload(raw);
     }
 
@@ -1450,7 +1475,10 @@ document.addEventListener('DOMContentLoaded', function () {
 
       try {
         const payload = await this.requestBotPayload(text, this.selectedTopic);
-        const answer = payload.answer || (this.i18n.api_error || 'Er ging iets mis met het ophalen van het antwoord.');
+        const rawAnswer = String(payload.answer || '').trim();
+        const answer = (!rawAnswer || isCriticalHtmlPayload(rawAnswer))
+          ? (this.i18n.api_error || 'Er ging iets mis met het ophalen van het antwoord.')
+          : rawAnswer;
 
         const suggested = this.topicChoices.find((choice) => choice.key === payload.suggestedTopic) || null;
         const shouldConfirmSwitch = payload.status === 'topic_mismatch' && this.showTopicSelector && !!suggested;

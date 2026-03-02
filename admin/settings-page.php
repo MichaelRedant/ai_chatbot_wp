@@ -37,7 +37,7 @@ add_action('admin_enqueue_scripts', function($hook) {
         wp_enqueue_script('octopus-ai-admin-media', plugin_dir_url(__FILE__) . '../assets/js/admin-media-uploader.js', array('jquery'), '1.0', true);
 
         wp_localize_script('octopus-ai-admin-settings', 'octopusAiAdminSettingsVars', array(
-            'queryParamsToClear' => array('upload', 'delete', 'bulk_delete', 'chunks_deleted', 'chunks_cleared', 'sitemap_debug', 'pages', 'found', 'queued', 'sitemap_saved', 'sitemap_refreshed', 'sitemap_file', 'sitemap_error', 'pdf_queued', 'pdf_error', 'config_imported', 'config_updated', 'config_processed', 'config_unchanged', 'config_skipped_sensitive', 'config_skipped_unknown', 'config_format', 'config_import_error', 'config_export_error', 'regression_ran', 'regression_cases', 'regression_pass', 'regression_fail', 'regression_error', 'cleanup_purged', 'cleanup_options', 'cleanup_dirs', 'cleanup_tables', 'cleanup_error'),
+            'queryParamsToClear' => array('upload', 'delete', 'bulk_delete', 'chunks_deleted', 'chunks_cleared', 'sitemap_debug', 'pages', 'found', 'queued', 'sitemap_saved', 'sitemap_refreshed', 'sitemap_file', 'sitemap_error', 'pdf_queued', 'pdf_error', 'config_imported', 'config_updated', 'config_processed', 'config_unchanged', 'config_skipped_sensitive', 'config_skipped_unknown', 'config_format', 'config_import_error', 'config_export_error', 'regression_ran', 'regression_cases', 'regression_pass', 'regression_fail', 'regression_error', 'release_generated', 'release_published', 'release_error', 'release_version', 'cleanup_purged', 'cleanup_options', 'cleanup_dirs', 'cleanup_tables', 'cleanup_error'),
         ));
     }
 });
@@ -639,6 +639,332 @@ if (!function_exists('octopus_ai_run_regression_suite')) {
     }
 }
 
+if (!function_exists('octopus_ai_get_current_plugin_version')) {
+    function octopus_ai_get_current_plugin_version() {
+        $main_file = function_exists('octopus_ai_get_runtime_base_path')
+            ? trailingslashit((string) octopus_ai_get_runtime_base_path()) . 'octopus-ai-chatbot.php'
+            : '';
+        if ($main_file === '' || !file_exists($main_file)) {
+            return '';
+        }
+
+        $raw = @file_get_contents($main_file, false, null, 0, 4096);
+        if (!is_string($raw) || $raw === '') {
+            return '';
+        }
+
+        if (!preg_match('/^[ \t\/*#@]*Version:\s*([^\r\n]+)$/mi', $raw, $matches)) {
+            return '';
+        }
+
+        return sanitize_text_field((string) trim((string) ($matches[1] ?? '')));
+    }
+}
+
+if (!function_exists('octopus_ai_normalize_semver')) {
+    function octopus_ai_normalize_semver($version, $allow_short = false) {
+        $version = trim((string) $version);
+        if ($version === '') {
+            return '';
+        }
+
+        $version = ltrim($version, "vV");
+        if (
+            $allow_short &&
+            preg_match('/^\d+\.\d+$/', $version)
+        ) {
+            $version .= '.0';
+        } elseif (
+            $allow_short &&
+            preg_match('/^\d+$/', $version)
+        ) {
+            $version .= '.0.0';
+        }
+
+        if (!preg_match('/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/', $version)) {
+            return '';
+        }
+
+        return $version;
+    }
+}
+
+if (!function_exists('octopus_ai_detect_semver_bump_type')) {
+    function octopus_ai_detect_semver_bump_type($from_version, $to_version) {
+        $from_version = octopus_ai_normalize_semver($from_version, true);
+        $to_version = octopus_ai_normalize_semver($to_version, false);
+        if ($from_version === '' || $to_version === '') {
+            return 'invalid';
+        }
+
+        if (version_compare($to_version, $from_version, '<=')) {
+            return 'invalid';
+        }
+
+        $parse = static function($v) {
+            $parts = preg_split('/[-+]/', (string) $v);
+            $core = isset($parts[0]) ? explode('.', (string) $parts[0]) : array(0, 0, 0);
+            return array(
+                'major' => (int) ($core[0] ?? 0),
+                'minor' => (int) ($core[1] ?? 0),
+                'patch' => (int) ($core[2] ?? 0),
+                'has_pre' => strpos((string) $v, '-') !== false,
+            );
+        };
+
+        $from = $parse($from_version);
+        $to = $parse($to_version);
+
+        if ($to['major'] > $from['major']) {
+            return 'major';
+        }
+        if ($to['minor'] > $from['minor']) {
+            return 'minor';
+        }
+        if ($to['patch'] > $from['patch']) {
+            return 'patch';
+        }
+        if ($to['has_pre'] || $from['has_pre']) {
+            return 'prerelease';
+        }
+
+        return 'patch';
+    }
+}
+
+if (!function_exists('octopus_ai_suggest_next_semver')) {
+    function octopus_ai_suggest_next_semver($current_version, $bump = 'patch') {
+        $current = octopus_ai_normalize_semver($current_version, true);
+        if ($current === '') {
+            return '1.0.0';
+        }
+
+        $parts = preg_split('/[-+]/', $current);
+        $core = isset($parts[0]) ? explode('.', (string) $parts[0]) : array(0, 0, 0);
+        $major = (int) ($core[0] ?? 0);
+        $minor = (int) ($core[1] ?? 0);
+        $patch = (int) ($core[2] ?? 0);
+
+        $bump = sanitize_key((string) $bump);
+        if ($bump === 'major') {
+            $major++;
+            $minor = 0;
+            $patch = 0;
+        } elseif ($bump === 'minor') {
+            $minor++;
+            $patch = 0;
+        } else {
+            $patch++;
+        }
+
+        return $major . '.' . $minor . '.' . $patch;
+    }
+}
+
+if (!function_exists('octopus_ai_get_release_draft')) {
+    function octopus_ai_get_release_draft() {
+        $draft = get_option('octopus_ai_release_draft', array());
+        if (!is_array($draft)) {
+            $draft = array();
+        }
+
+        $version = octopus_ai_normalize_semver((string) ($draft['target_version'] ?? ''), false);
+        $generated_at = sanitize_text_field((string) ($draft['generated_at'] ?? ''));
+        $markdown = (string) ($draft['changelog_markdown'] ?? '');
+        $checklist = isset($draft['checklist']) && is_array($draft['checklist']) ? $draft['checklist'] : array();
+        $ready = !empty($draft['ready']) ? 1 : 0;
+
+        return array(
+            'target_version' => $version,
+            'generated_at' => $generated_at,
+            'checklist' => $checklist,
+            'changelog_markdown' => $markdown,
+            'ready' => $ready,
+        );
+    }
+}
+
+if (!function_exists('octopus_ai_build_release_checklist')) {
+    function octopus_ai_build_release_checklist($target_version) {
+        $target_version = octopus_ai_normalize_semver($target_version, false);
+        if ($target_version === '') {
+            return new WP_Error('octopus_ai_semver_invalid', 'Versie is geen geldige semver (bijv. 1.4.2).');
+        }
+
+        $current_raw = octopus_ai_get_current_plugin_version();
+        $current_semver = octopus_ai_normalize_semver($current_raw, true);
+        $last_published = octopus_ai_normalize_semver((string) get_option('octopus_ai_release_last_published_version', ''), true);
+        $baseline = $last_published !== '' ? $last_published : $current_semver;
+        $bump_type = octopus_ai_detect_semver_bump_type($baseline, $target_version);
+
+        $quality_gate = function_exists('octopus_ai_build_quality_gate_report')
+            ? octopus_ai_build_quality_gate_report()
+            : array('enabled' => false, 'pass' => true, 'failed_labels' => array());
+        $preflight = function_exists('octopus_ai_collect_preflight_report')
+            ? octopus_ai_collect_preflight_report()
+            : array('critical' => array(), 'warning' => array(), 'ok' => array());
+        $critical_count = isset($preflight['critical']) && is_array($preflight['critical'])
+            ? count($preflight['critical'])
+            : 0;
+
+        $regression = octopus_ai_get_regression_snapshot();
+        $thresholds = octopus_ai_get_quality_gate_thresholds();
+        $regression_min_cases = (int) ($thresholds['min_regression_cases'] ?? 6);
+        $regression_min_pass = (float) ($thresholds['min_regression_pass_rate'] ?? 75);
+        $regression_max_age = (int) ($thresholds['max_regression_age_hours'] ?? 168);
+        $regression_cases = (int) ($regression['total_cases'] ?? 0);
+        $regression_pass = (float) ($regression['pass_rate'] ?? 0.0);
+        $regression_age = (float) ($regression['age_hours'] ?? 99999.0);
+        $regression_ok = (
+            $regression_cases >= $regression_min_cases &&
+            $regression_pass >= $regression_min_pass &&
+            ($regression_max_age <= 0 || $regression_age <= $regression_max_age)
+        );
+
+        $checklist = array(
+            array(
+                'key' => 'semver',
+                'label' => 'Targetversie is geldige semver',
+                'status' => 'pass',
+                'detail' => $target_version,
+            ),
+            array(
+                'key' => 'bump',
+                'label' => 'Semver bump is stijgend tegenover baseline',
+                'status' => $bump_type === 'invalid' ? 'fail' : 'pass',
+                'detail' => 'Baseline: ' . ($baseline !== '' ? $baseline : 'onbekend') . ', bump: ' . $bump_type . '.',
+            ),
+            array(
+                'key' => 'quality_gate',
+                'label' => 'Quality gate',
+                'status' => !empty($quality_gate['enabled'])
+                    ? (!empty($quality_gate['pass']) ? 'pass' : 'fail')
+                    : 'warn',
+                'detail' => !empty($quality_gate['enabled'])
+                    ? (!empty($quality_gate['pass'])
+                        ? 'PASS'
+                        : ('FAIL: ' . implode(', ', array_map('sanitize_text_field', (array) ($quality_gate['failed_labels'] ?? array())))))
+                    : 'Gate staat uit.',
+            ),
+            array(
+                'key' => 'preflight',
+                'label' => 'Preflight zonder kritieke issues',
+                'status' => $critical_count === 0 ? 'pass' : 'fail',
+                'detail' => $critical_count === 0 ? 'Geen kritieke issues.' : ($critical_count . ' kritieke issues.'),
+            ),
+            array(
+                'key' => 'regression',
+                'label' => 'Regressiesuite voldoet aan drempels',
+                'status' => $regression_min_cases <= 0 ? 'warn' : ($regression_ok ? 'pass' : 'fail'),
+                'detail' => 'Pass: ' . $regression_pass . '%, cases: ' . $regression_cases . ', leeftijd: ' . $regression_age . 'u.',
+            ),
+        );
+
+        $fail_count = 0;
+        $warn_count = 0;
+        foreach ($checklist as $item) {
+            $status = sanitize_key((string) ($item['status'] ?? ''));
+            if ($status === 'fail') {
+                $fail_count++;
+            } elseif ($status === 'warn') {
+                $warn_count++;
+            }
+        }
+
+        return array(
+            'target_version' => $target_version,
+            'current_version' => $current_raw,
+            'baseline_version' => $baseline,
+            'bump_type' => $bump_type,
+            'checklist' => $checklist,
+            'ready' => $fail_count === 0,
+            'fail_count' => $fail_count,
+            'warn_count' => $warn_count,
+            'quality_gate' => $quality_gate,
+            'regression' => $regression,
+        );
+    }
+}
+
+if (!function_exists('octopus_ai_build_release_changelog_markdown')) {
+    function octopus_ai_build_release_changelog_markdown(array $release_report) {
+        $target_version = octopus_ai_normalize_semver((string) ($release_report['target_version'] ?? ''), false);
+        $bump_type = sanitize_key((string) ($release_report['bump_type'] ?? 'patch'));
+        $quality_gate = isset($release_report['quality_gate']) && is_array($release_report['quality_gate'])
+            ? $release_report['quality_gate']
+            : array();
+        $regression = isset($release_report['regression']) && is_array($release_report['regression'])
+            ? $release_report['regression']
+            : array();
+
+        $quality_state = !empty($quality_gate['enabled'])
+            ? (!empty($quality_gate['pass']) ? 'PASS' : 'FAIL')
+            : 'UIT';
+        $regression_pass = (float) ($regression['pass_rate'] ?? 0.0);
+        $regression_cases = (int) ($regression['total_cases'] ?? 0);
+        $regression_age = (float) ($regression['age_hours'] ?? 99999.0);
+        $generated_at = gmdate('Y-m-d H:i:s') . ' UTC';
+
+        $lines = array();
+        $lines[] = '## [' . $target_version . '] - ' . gmdate('Y-m-d');
+        $lines[] = '';
+        $lines[] = '### Release Type';
+        $lines[] = '- Semver bump: `' . $bump_type . '`';
+        $lines[] = '- Gegenereerd op: `' . $generated_at . '`';
+        $lines[] = '';
+        $lines[] = '### Changed';
+        $lines[] = '- Quality gate status tijdens generatie: `' . $quality_state . '`.';
+        $lines[] = '- Regressiesuite snapshot: `' . $regression_pass . '%` PASS over `' . $regression_cases . '` cases.';
+        $lines[] = '- Leeftijd regressiesnapshot: `' . $regression_age . ' uur`.';
+        $lines[] = '';
+        $lines[] = '### Checklist';
+
+        $checklist = isset($release_report['checklist']) && is_array($release_report['checklist'])
+            ? $release_report['checklist']
+            : array();
+        foreach ($checklist as $item) {
+            if (!is_array($item)) {
+                continue;
+            }
+            $status = sanitize_key((string) ($item['status'] ?? 'warn'));
+            $label = sanitize_text_field((string) ($item['label'] ?? 'Check'));
+            $detail = sanitize_text_field((string) ($item['detail'] ?? ''));
+            $checkbox = $status === 'pass' ? 'x' : ' ';
+            $lines[] = '- [' . $checkbox . '] ' . $label . ($detail !== '' ? ' (' . $detail . ')' : '');
+        }
+
+        $lines[] = '';
+        $lines[] = '### Notes';
+        $lines[] = '- Vul hier handmatig functionele wijzigingen, bugfixes en migratienotities aan.';
+        $lines[] = '- Werk na publicatie de plugin header `Version:` bij naar `' . $target_version . '`.';
+
+        return implode("\n", $lines);
+    }
+}
+
+if (!function_exists('octopus_ai_generate_release_draft')) {
+    function octopus_ai_generate_release_draft($target_version) {
+        $report = octopus_ai_build_release_checklist($target_version);
+        if (is_wp_error($report)) {
+            return $report;
+        }
+
+        $markdown = octopus_ai_build_release_changelog_markdown($report);
+        $draft = array(
+            'target_version' => (string) ($report['target_version'] ?? ''),
+            'generated_at' => gmdate('c'),
+            'ready' => !empty($report['ready']) ? 1 : 0,
+            'checklist' => isset($report['checklist']) && is_array($report['checklist']) ? $report['checklist'] : array(),
+            'changelog_markdown' => (string) $markdown,
+            'bump_type' => sanitize_key((string) ($report['bump_type'] ?? 'patch')),
+            'baseline_version' => sanitize_text_field((string) ($report['baseline_version'] ?? '')),
+        );
+
+        update_option('octopus_ai_release_draft', $draft);
+        return $draft;
+    }
+}
+
 function octopus_ai_collect_quality_gate_metrics() {
     $upload_dir = wp_upload_dir();
     $upload_path = trailingslashit((string) ($upload_dir['basedir'] ?? '')) . 'octopus-chatbot/';
@@ -1099,6 +1425,85 @@ function octopus_ai_handle_run_regression_suite() {
         'regression_cases' => (int) ($snapshot['total_cases'] ?? 0),
         'regression_pass' => (int) ($snapshot['pass_cases'] ?? 0),
         'regression_fail' => (int) ($snapshot['fail_cases'] ?? 0),
+    ));
+}
+
+add_action('admin_post_octopus_ai_generate_release_draft', 'octopus_ai_handle_generate_release_draft');
+function octopus_ai_handle_generate_release_draft() {
+    if (
+        !current_user_can('manage_options') ||
+        !isset($_POST['octopus_ai_release_nonce']) ||
+        !wp_verify_nonce($_POST['octopus_ai_release_nonce'], 'octopus_ai_generate_release_draft')
+    ) {
+        wp_die('Beveiligingsfout bij release draft.');
+    }
+
+    $target_version = isset($_POST['octopus_ai_release_target_version'])
+        ? sanitize_text_field((string) wp_unslash($_POST['octopus_ai_release_target_version']))
+        : '';
+    $draft = octopus_ai_generate_release_draft($target_version);
+    if (is_wp_error($draft)) {
+        octopus_ai_settings_admin_redirect(array(
+            'release_error' => $draft->get_error_message(),
+        ));
+    }
+
+    octopus_ai_settings_admin_redirect(array(
+        'release_generated' => 1,
+        'release_version' => (string) ($draft['target_version'] ?? ''),
+    ));
+}
+
+add_action('admin_post_octopus_ai_publish_release_draft', 'octopus_ai_handle_publish_release_draft');
+function octopus_ai_handle_publish_release_draft() {
+    $nonce_value = '';
+    if (isset($_REQUEST['octopus_ai_release_publish_nonce'])) {
+        $nonce_value = (string) wp_unslash($_REQUEST['octopus_ai_release_publish_nonce']);
+    } elseif (isset($_REQUEST['_wpnonce'])) {
+        $nonce_value = (string) wp_unslash($_REQUEST['_wpnonce']);
+    }
+
+    if (
+        !current_user_can('manage_options') ||
+        $nonce_value === '' ||
+        !wp_verify_nonce($nonce_value, 'octopus_ai_publish_release_draft')
+    ) {
+        wp_die('Beveiligingsfout bij release publicatie.');
+    }
+
+    $draft = octopus_ai_get_release_draft();
+    $version = octopus_ai_normalize_semver((string) ($draft['target_version'] ?? ''), false);
+    if ($version === '') {
+        octopus_ai_settings_admin_redirect(array(
+            'release_error' => 'Geen geldige release draft gevonden.',
+        ));
+    }
+
+    if (empty($draft['ready'])) {
+        octopus_ai_settings_admin_redirect(array(
+            'release_error' => 'Release draft is niet klaar: los eerst failing checklist-items op.',
+        ));
+    }
+
+    $published_at = gmdate('c');
+    update_option('octopus_ai_release_last_published_version', $version);
+    update_option('octopus_ai_release_last_published_at', $published_at);
+
+    $history = get_option('octopus_ai_release_history', array());
+    if (!is_array($history)) {
+        $history = array();
+    }
+    array_unshift($history, array(
+        'version' => $version,
+        'published_at' => $published_at,
+        'generated_at' => sanitize_text_field((string) ($draft['generated_at'] ?? '')),
+    ));
+    $history = array_slice($history, 0, 30);
+    update_option('octopus_ai_release_history', $history);
+
+    octopus_ai_settings_admin_redirect(array(
+        'release_published' => 1,
+        'release_version' => $version,
     ));
 }
 
@@ -2178,6 +2583,33 @@ function octopus_ai_settings_page() {
         ? $quality_gate_report['failed_labels']
         : array();
 
+    $current_plugin_version = octopus_ai_get_current_plugin_version();
+    $current_plugin_semver = octopus_ai_normalize_semver($current_plugin_version, true);
+    $release_draft = octopus_ai_get_release_draft();
+    $last_published_version = octopus_ai_normalize_semver((string) get_option('octopus_ai_release_last_published_version', ''), true);
+    $last_published_at = sanitize_text_field((string) get_option('octopus_ai_release_last_published_at', ''));
+    $release_history = get_option('octopus_ai_release_history', array());
+    if (!is_array($release_history)) {
+        $release_history = array();
+    }
+    $release_history = array_values(array_filter($release_history, static function($row) {
+        return is_array($row) && !empty($row['version']);
+    }));
+    $release_history = array_slice($release_history, 0, 10);
+
+    $release_default_version = $release_draft['target_version'] ?? '';
+    if ($release_default_version === '') {
+        $release_default_version = octopus_ai_suggest_next_semver($current_plugin_semver !== '' ? $current_plugin_semver : $current_plugin_version, 'patch');
+    }
+
+    $release_draft_report = array();
+    if (!empty($release_draft['target_version'])) {
+        $maybe_report = octopus_ai_build_release_checklist((string) $release_draft['target_version']);
+        if (!is_wp_error($maybe_report) && is_array($maybe_report)) {
+            $release_draft_report = $maybe_report;
+        }
+    }
+
     ?>
     <div class="wrap octopus-settings">
         <h1>AI Chatbot Instellingen</h1>
@@ -2289,6 +2721,22 @@ function octopus_ai_settings_page() {
 
         <?php if (isset($_GET['regression_error']) && $_GET['regression_error'] !== '') : ?>
             <div class="notice notice-error is-dismissible"><p><?php echo esc_html(sanitize_text_field((string) wp_unslash($_GET['regression_error']))); ?></p></div>
+        <?php endif; ?>
+
+        <?php if (isset($_GET['release_generated']) && intval($_GET['release_generated']) === 1) : ?>
+            <div class="notice notice-success is-dismissible">
+                <p>Release draft gegenereerd voor versie <?php echo esc_html(sanitize_text_field((string) wp_unslash($_GET['release_version'] ?? ''))); ?>.</p>
+            </div>
+        <?php endif; ?>
+
+        <?php if (isset($_GET['release_published']) && intval($_GET['release_published']) === 1) : ?>
+            <div class="notice notice-success is-dismissible">
+                <p>Release gemarkeerd als gepubliceerd: <?php echo esc_html(sanitize_text_field((string) wp_unslash($_GET['release_version'] ?? ''))); ?>.</p>
+            </div>
+        <?php endif; ?>
+
+        <?php if (isset($_GET['release_error']) && $_GET['release_error'] !== '') : ?>
+            <div class="notice notice-error is-dismissible"><p><?php echo esc_html(sanitize_text_field((string) wp_unslash($_GET['release_error']))); ?></p></div>
         <?php endif; ?>
 
         <?php if (isset($_GET['cleanup_purged']) && intval($_GET['cleanup_purged']) === 1) : ?>
@@ -2865,6 +3313,123 @@ function octopus_ai_settings_page() {
                 <?php submit_button('Importeer configuratie', 'secondary', '', false); ?>
             </form>
             <p class="description" style="margin-top:8px;">Formaat: versie 2 met checksum-validatie. Oudere exports blijven compatibel.</p>
+        </div>
+
+        <div class="upload-box octopus-release-box">
+            <h3>Release manager</h3>
+            <p class="section-description">Automatiseert semver-validatie, release checklist en changelog-draft zonder extra tabellen.</p>
+            <p style="margin:0 0 8px;">
+                <strong>Huidige pluginversie:</strong>
+                <?php echo esc_html($current_plugin_version !== '' ? $current_plugin_version : 'onbekend'); ?>
+                <?php if ($current_plugin_semver !== '') : ?>
+                    (<code><?php echo esc_html($current_plugin_semver); ?></code>)
+                <?php endif; ?>
+            </p>
+            <?php if ($last_published_version !== '') : ?>
+                <p style="margin:0 0 10px;">
+                    <strong>Laatst gepubliceerd:</strong>
+                    <code><?php echo esc_html($last_published_version); ?></code>
+                    <?php if ($last_published_at !== '') : ?>
+                        op <?php echo esc_html($last_published_at); ?>
+                    <?php endif; ?>
+                </p>
+            <?php endif; ?>
+
+            <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" style="margin:8px 0 14px;">
+                <?php wp_nonce_field('octopus_ai_generate_release_draft', 'octopus_ai_release_nonce'); ?>
+                <input type="hidden" name="action" value="octopus_ai_generate_release_draft">
+                <label for="octopus_ai_release_target_version"><strong>Target release (semver)</strong></label><br>
+                <input
+                    id="octopus_ai_release_target_version"
+                    type="text"
+                    name="octopus_ai_release_target_version"
+                    value="<?php echo esc_attr($release_default_version); ?>"
+                    pattern="^[vV]?[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$"
+                    placeholder="bijv. 1.4.2"
+                    style="max-width:220px;margin-top:6px;"
+                    required
+                >
+                <?php submit_button('Genereer release draft', 'secondary', '', false); ?>
+            </form>
+
+            <?php if (!empty($release_draft['target_version'])) : ?>
+                <p style="margin:0 0 10px;">
+                    <strong>Draft versie:</strong> <code><?php echo esc_html((string) $release_draft['target_version']); ?></code>
+                    <?php if (!empty($release_draft['generated_at'])) : ?>
+                        | gegenereerd op <?php echo esc_html((string) $release_draft['generated_at']); ?>
+                    <?php endif; ?>
+                    | status: <strong><?php echo !empty($release_draft['ready']) ? 'READY' : 'BLOCKED'; ?></strong>
+                </p>
+
+                <?php if (!empty($release_draft_report['checklist']) && is_array($release_draft_report['checklist'])) : ?>
+                    <table class="widefat striped" style="max-width:980px;margin-bottom:10px;">
+                        <thead>
+                            <tr>
+                                <th>Checklist item</th>
+                                <th>Status</th>
+                                <th>Detail</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <?php foreach ($release_draft_report['checklist'] as $item) : ?>
+                                <?php
+                                $item_status = sanitize_key((string) ($item['status'] ?? 'warn'));
+                                $item_status_label = strtoupper($item_status);
+                                ?>
+                                <tr>
+                                    <td><?php echo esc_html((string) ($item['label'] ?? 'Item')); ?></td>
+                                    <td><?php echo esc_html($item_status_label); ?></td>
+                                    <td><?php echo esc_html((string) ($item['detail'] ?? '')); ?></td>
+                                </tr>
+                            <?php endforeach; ?>
+                        </tbody>
+                    </table>
+                <?php endif; ?>
+
+                <label for="octopus_ai_release_changelog_draft"><strong>Changelog draft (markdown)</strong></label>
+                <textarea
+                    id="octopus_ai_release_changelog_draft"
+                    rows="14"
+                    style="width:100%;max-width:980px;margin-top:6px;font-family:Consolas,monospace;"
+                    readonly
+                ><?php echo esc_textarea((string) ($release_draft['changelog_markdown'] ?? '')); ?></textarea>
+
+                <?php
+                $publish_release_url = wp_nonce_url(
+                    admin_url('admin-post.php?action=octopus_ai_publish_release_draft'),
+                    'octopus_ai_publish_release_draft',
+                    'octopus_ai_release_publish_nonce'
+                );
+                ?>
+                <p style="margin:8px 0 0;">
+                    <?php if (!empty($release_draft['ready'])) : ?>
+                        <a class="button button-secondary" href="<?php echo esc_url($publish_release_url); ?>">Markeer draft als gepubliceerd</a>
+                    <?php else : ?>
+                        <span class="description">Publiceren is geblokkeerd tot alle checklist-items PASS zijn.</span>
+                    <?php endif; ?>
+                </p>
+            <?php endif; ?>
+
+            <?php if (!empty($release_history)) : ?>
+                <p style="margin:14px 0 6px;"><strong>Recente releases</strong></p>
+                <ul class="octopus-disc-list" style="margin:0;">
+                    <?php foreach ($release_history as $history_row) : ?>
+                        <?php
+                        $history_version = octopus_ai_normalize_semver((string) ($history_row['version'] ?? ''), true);
+                        if ($history_version === '') {
+                            continue;
+                        }
+                        $history_published = sanitize_text_field((string) ($history_row['published_at'] ?? ''));
+                        ?>
+                        <li>
+                            <code><?php echo esc_html($history_version); ?></code>
+                            <?php if ($history_published !== '') : ?>
+                                - <?php echo esc_html($history_published); ?>
+                            <?php endif; ?>
+                        </li>
+                    <?php endforeach; ?>
+                </ul>
+            <?php endif; ?>
         </div>
 
         <div class="upload-box octopus-cleanup-box">
