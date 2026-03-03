@@ -345,6 +345,66 @@ if (!function_exists('octopus_ai_is_plugin_admin_page')) {
     }
 }
 
+if (!function_exists('octopus_ai_preflight_memory_limit_bytes')) {
+    function octopus_ai_preflight_memory_limit_bytes()
+    {
+        $raw = trim((string) ini_get('memory_limit'));
+        if ($raw === '') {
+            return 0;
+        }
+        if ($raw === '-1') {
+            return -1;
+        }
+
+        $unit = strtolower(substr($raw, -1));
+        $bytes = (float) $raw;
+        switch ($unit) {
+            case 'g':
+                $bytes *= 1024;
+                // no break
+            case 'm':
+                $bytes *= 1024;
+                // no break
+            case 'k':
+                $bytes *= 1024;
+                break;
+        }
+
+        return (int) max(0, $bytes);
+    }
+}
+
+if (!function_exists('octopus_ai_is_chatbot_rest_request')) {
+    function octopus_ai_is_chatbot_rest_request()
+    {
+        $candidates = array();
+        if (isset($_REQUEST['rest_route'])) {
+            $candidates[] = (string) wp_unslash($_REQUEST['rest_route']);
+        }
+        if (isset($_SERVER['REQUEST_URI'])) {
+            $candidates[] = (string) $_SERVER['REQUEST_URI'];
+        }
+
+        foreach ($candidates as $candidate) {
+            $candidate = strtolower(trim((string) $candidate));
+            if ($candidate === '') {
+                continue;
+            }
+
+            if (
+                strpos($candidate, '/octopus-ai/v1/chatbot') !== false ||
+                strpos($candidate, '/octopus-ai/v1/feedback') !== false ||
+                strpos($candidate, 'rest_route=/octopus-ai/v1/chatbot') !== false ||
+                strpos($candidate, 'rest_route=%2foctopus-ai%2fv1%2fchatbot') !== false
+            ) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+}
+
 if (!function_exists('octopus_ai_collect_preflight_report')) {
     function octopus_ai_collect_preflight_report()
     {
@@ -385,6 +445,66 @@ if (!function_exists('octopus_ai_collect_preflight_report')) {
             $report['critical'][] = 'PHP-versie is te oud (' . PHP_VERSION . '). Minimaal 7.4 is nodig.';
         } else {
             $report['ok'][] = 'PHP-versie: ' . PHP_VERSION . '.';
+        }
+
+        $mb = 1024 * 1024;
+        $memory_limit_bytes = function_exists('octopus_ai_get_memory_limit_bytes')
+            ? (int) octopus_ai_get_memory_limit_bytes()
+            : (int) octopus_ai_preflight_memory_limit_bytes();
+        if ($memory_limit_bytes === -1) {
+            $report['ok'][] = 'PHP memory_limit: onbeperkt.';
+        } elseif ($memory_limit_bytes > 0) {
+            $memory_limit_human = function_exists('size_format')
+                ? size_format($memory_limit_bytes, 0)
+                : ($memory_limit_bytes . ' bytes');
+            if ($memory_limit_bytes < (192 * $mb)) {
+                $report['warning'][] = 'Lage PHP memory_limit (' . $memory_limit_human . '). Dit kan live-handleidingvragen laten crashen.';
+            } elseif ($memory_limit_bytes < (256 * $mb)) {
+                $report['warning'][] = 'Beperkte PHP memory_limit (' . $memory_limit_human . '). Live-handleiding werkt stabieler vanaf 256 MB.';
+            } else {
+                $report['ok'][] = 'PHP memory_limit: ' . $memory_limit_human . '.';
+            }
+        } else {
+            $report['warning'][] = 'PHP memory_limit kon niet bepaald worden.';
+        }
+
+        $max_execution_time = (int) ini_get('max_execution_time');
+        if ($max_execution_time > 0 && $max_execution_time < 30) {
+            $report['warning'][] = 'Lage max_execution_time (' . $max_execution_time . 's). Live-handleidingvragen kunnen time-outs geven.';
+        } elseif ($max_execution_time === 0) {
+            $report['ok'][] = 'max_execution_time: onbeperkt.';
+        } else {
+            $report['ok'][] = 'max_execution_time: ' . $max_execution_time . 's.';
+        }
+
+        if (
+            function_exists('octopus_ai_get_manual_mode') &&
+            in_array((string) octopus_ai_get_manual_mode(), array('live', 'hybrid'), true) &&
+            function_exists('octopus_ai_live_manual_safe_mode') &&
+            octopus_ai_live_manual_safe_mode()
+        ) {
+            $report['warning'][] = 'Live manual safe mode is actief op deze omgeving (lagere limieten, crawl standaard uit tijdens chatverzoeken).';
+        }
+
+        $last_fatal = get_transient('octopus_ai_last_fatal_error');
+        if (is_array($last_fatal) && !empty($last_fatal['message'])) {
+            $fatal_time = sanitize_text_field((string) ($last_fatal['time'] ?? 'onbekend tijdstip'));
+            $fatal_file = sanitize_text_field((string) ($last_fatal['file'] ?? 'onbekend bestand'));
+            $fatal_line = (int) ($last_fatal['line'] ?? 0);
+            $fatal_message = sanitize_text_field((string) ($last_fatal['message'] ?? 'onbekende fatale fout'));
+            $fatal_ts = $fatal_time !== '' ? strtotime($fatal_time) : false;
+            $fatal_is_recent = ($fatal_ts !== false && $fatal_ts > 0 && (time() - $fatal_ts) <= (90 * MINUTE_IN_SECONDS));
+            if ($fatal_is_recent) {
+                $report['warning'][] = sprintf(
+                    'Laatste fatale fout (%s) in %s:%d - %s',
+                    $fatal_time,
+                    basename($fatal_file),
+                    $fatal_line,
+                    $fatal_message
+                );
+            } else {
+                $report['ok'][] = 'Geen recente fatale pluginfouten gedetecteerd.';
+            }
         }
 
         $upload_dir = wp_upload_dir();
@@ -461,19 +581,31 @@ if (!function_exists('octopus_ai_collect_preflight_report')) {
             }
         }
 
+        $show_cron_warning = (bool) apply_filters('octopus_ai_preflight_show_wp_cron_warning', false);
         if (defined('DISABLE_WP_CRON') && DISABLE_WP_CRON) {
-            $report['warning'][] = 'WP-Cron staat uit. Achtergrondverwerking (PDF/Sitemap queue) vereist een externe cron trigger.';
+            if ($show_cron_warning) {
+                $report['warning'][] = 'WP-Cron staat uit. Achtergrondverwerking (PDF/Sitemap queue) vereist een externe cron trigger.';
+            } else {
+                $report['ok'][] = 'WP-Cron staat uit (warning onderdrukt).';
+            }
         } else {
             $report['ok'][] = 'WP-Cron staat aan.';
         }
 
-        if (function_exists('octopus_ai_build_quality_gate_report')) {
+        $run_quality_gate_check = (bool) apply_filters('octopus_ai_preflight_run_quality_gate_check', false);
+        if ($run_quality_gate_check && function_exists('octopus_ai_build_quality_gate_report')) {
             $quality_gate = octopus_ai_build_quality_gate_report();
             $quality_enabled = !empty($quality_gate['enabled']);
             $quality_pass = !empty($quality_gate['pass']);
 
+            $show_quality_disabled_warning = (bool) apply_filters('octopus_ai_preflight_show_quality_gate_disabled_warning', false);
+
             if (!$quality_enabled) {
-                $report['warning'][] = 'Quality gate staat uit. Schakel in voor strengere productiecontrole.';
+                if ($show_quality_disabled_warning) {
+                    $report['warning'][] = 'Quality gate staat uit. Schakel in voor strengere productiecontrole.';
+                } else {
+                    $report['ok'][] = 'Quality gate staat uit (warning onderdrukt).';
+                }
             } elseif (!$quality_pass) {
                 $failed_labels = isset($quality_gate['failed_labels']) && is_array($quality_gate['failed_labels'])
                     ? array_values(array_filter(array_map('sanitize_text_field', $quality_gate['failed_labels'])))
@@ -564,13 +696,69 @@ if (!function_exists('octopus_ai_register_fatal_shutdown_logger')) {
 
                 $file = isset($error['file']) ? (string) $error['file'] : '';
                 $plugin_root = octopus_ai_get_runtime_base_path();
-                if ($file === '' || strpos($file, $plugin_root) !== 0) {
+                $is_plugin_file = ($file !== '' && strpos($file, $plugin_root) === 0);
+                $is_chatbot_rest = function_exists('octopus_ai_is_chatbot_rest_request')
+                    ? octopus_ai_is_chatbot_rest_request()
+                    : false;
+
+                if (!$is_plugin_file && !$is_chatbot_rest) {
                     return;
                 }
 
                 $line = isset($error['line']) ? (int) $error['line'] : 0;
                 $message = isset($error['message']) ? (string) $error['message'] : 'onbekende fatale fout';
                 error_log(sprintf('[Octopus AI] Fatale fout (%s:%d): %s', $file, $line, $message));
+
+                set_transient(
+                    'octopus_ai_last_fatal_error',
+                    array(
+                        'time' => current_time('mysql'),
+                        'file' => $file,
+                        'line' => $line,
+                        'message' => $message,
+                    ),
+                    DAY_IN_SECONDS
+                );
+
+                if ($is_chatbot_rest) {
+                    $lang = function_exists('octopus_ai_get_request_language')
+                        ? octopus_ai_get_request_language()
+                        : 'NL';
+                    $fallback_message = ($lang === 'FR')
+                        ? "Une erreur technique s'est produite. Essaie a nouveau ou consulte la documentation."
+                        : 'Er is een technische fout opgetreden. Probeer opnieuw of bekijk de handleiding.';
+                    $payload_data = array(
+                        'answer' => $fallback_message,
+                        'chat_id' => 0,
+                        'status' => 'runtime_fatal_fallback',
+                        'confidence' => 0.0,
+                        'reference_links' => array(),
+                        'suggested_topic' => '',
+                        'current_topic' => '',
+                        'primary_source_url' => '',
+                        'error_reason' => sanitize_text_field((string) $message),
+                    );
+
+                    if (function_exists('wp_json_encode')) {
+                        $payload = wp_json_encode($payload_data);
+                    } else {
+                        $payload = json_encode($payload_data);
+                    }
+
+                    if (is_string($payload) && $payload !== '') {
+                        while (ob_get_level() > 0) {
+                            @ob_end_clean();
+                        }
+                        if (!headers_sent()) {
+                            if (function_exists('status_header')) {
+                                status_header(200);
+                            }
+                            header('Content-Type: application/json; charset=utf-8');
+                            header('Cache-Control: no-cache, must-revalidate, max-age=0');
+                        }
+                        echo $payload;
+                    }
+                }
             }
         );
     }
@@ -737,6 +925,7 @@ function octopus_ai_enqueue_frontend_assets($render_context = null)
         array(
             'ajaxurl' => admin_url('admin-ajax.php'),
             'rest_url' => esc_url_raw(rest_url('octopus-ai/v1/chatbot')),
+            'rest_url_lite' => esc_url_raw(rest_url('octopus-ai/v1/chatbot-lite')),
             'feedback_url' => esc_url_raw(rest_url('octopus-ai/v1/feedback')),
             'lang' => $lang_code,
             'render_mode' => $mode_for_frontend,

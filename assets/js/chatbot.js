@@ -71,6 +71,72 @@ document.addEventListener('DOMContentLoaded', function () {
     return hasHtml && lower.indexOf('wordpress') !== -1 && lower.indexOf('critical error') !== -1;
   }
 
+  function stripHtmlTags(value) {
+    return String(value || '').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
+  }
+
+  function parseApiErrorMessage(raw) {
+    const text = String(raw || '').trim();
+    if (!text || isCriticalHtmlPayload(text)) return '';
+
+    try {
+      const parsed = JSON.parse(text);
+      const candidates = [
+        parsed && parsed.message,
+        parsed && parsed.error && parsed.error.message,
+        parsed && parsed.data && parsed.data.message,
+        parsed && parsed.data && parsed.data.error
+      ];
+
+      for (let i = 0; i < candidates.length; i++) {
+        const candidate = candidates[i];
+        if (typeof candidate !== 'string') continue;
+        const clean = stripHtmlTags(candidate);
+        if (!clean) continue;
+        if (clean.length > 260) return clean.slice(0, 257) + '...';
+        return clean;
+      }
+    } catch (error) {
+      // ignore parse failures
+    }
+
+    return '';
+  }
+
+  function getApiErrorText(error, fallbackMessage) {
+    const fallback = String(fallbackMessage || '').trim() || 'Er ging iets mis met het ophalen van het antwoord.';
+    if (error && error.name === 'AbortError') {
+      return fallback;
+    }
+    if (error && typeof error.userMessage === 'string' && error.userMessage.trim()) {
+      return error.userMessage.trim();
+    }
+    if (error && typeof error.message === 'string') {
+      const message = error.message.trim();
+      if (message && message !== 'runtime_html_error' && !/^http_\d+$/i.test(message)) {
+        return message;
+      }
+    }
+    return fallback;
+  }
+
+  async function fetchWithTimeout(url, options, timeoutMs) {
+    const timeout = parseIntInRange(timeoutMs, 3000, 90000, 20000);
+    if (typeof AbortController === 'undefined') {
+      return fetch(url, options || {});
+    }
+
+    const controller = new AbortController();
+    const requestOptions = Object.assign({}, options || {}, { signal: controller.signal });
+    const timer = setTimeout(() => controller.abort(), timeout);
+
+    try {
+      return await fetch(url, requestOptions);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
   function decodeUnicode(value) {
     return String(value || '')
       .replace(/\\\\\//g, '/')
@@ -316,7 +382,10 @@ document.addEventListener('DOMContentLoaded', function () {
       this.prefersReducedMotion = options.prefersReducedMotion;
 
       this.restEndpoint = this.settings.rest_url || '/wp-json/octopus-ai/v1/chatbot';
+      this.restEndpointLite = this.settings.rest_url_lite || '/wp-json/octopus-ai/v1/chatbot-lite';
       this.feedbackEndpoint = this.settings.feedback_url || '/wp-json/octopus-ai/v1/feedback';
+      this.requestTimeoutMs = parseIntInRange(this.settings.request_timeout_ms, 3000, 90000, 20000);
+      this.feedbackTimeoutMs = parseIntInRange(this.settings.feedback_timeout_ms, 3000, 30000, 12000);
       this.sentFeedback = new Set();
       this.messages = [];
       this.isSending = false;
@@ -1116,7 +1185,7 @@ document.addEventListener('DOMContentLoaded', function () {
           });
           actions.innerHTML = '<span class="topic-switch-note">' + escapeHtml(this.lang === 'FR' ? 'Choix applique.' : 'Keuze toegepast.') + '</span>';
         } catch (error) {
-          this.addMessage(this.i18n.api_error || 'Er ging iets mis met het ophalen van het antwoord.', 'bot', { chatId: 0 });
+          this.addMessage(getApiErrorText(error, this.i18n.api_error || 'Er ging iets mis met het ophalen van het antwoord.'), 'bot', { chatId: 0 });
           actions.innerHTML = '<span class="topic-switch-note">' + escapeHtml(this.lang === 'FR' ? 'Proposition non traitee.' : 'Keuze kon niet verwerkt worden.') + '</span>';
         } finally {
           typing.remove();
@@ -1212,7 +1281,7 @@ document.addEventListener('DOMContentLoaded', function () {
 
           finalize(this.lang === 'FR' ? 'Flux defini.' : 'Flow ingesteld.');
         } catch (error) {
-          this.addMessage(this.i18n.api_error || 'Er ging iets mis met het ophalen van het antwoord.', 'bot', { chatId: 0 });
+          this.addMessage(getApiErrorText(error, this.i18n.api_error || 'Er ging iets mis met het ophalen van het antwoord.'), 'bot', { chatId: 0 });
           finalize(this.lang === 'FR' ? 'Proposition non traitee.' : 'Keuze kon niet verwerkt worden.');
         } finally {
           typing.remove();
@@ -1405,34 +1474,129 @@ document.addEventListener('DOMContentLoaded', function () {
 
     serializeHistoryForApi() {
       return this.messages
-        .filter((item) => item.sender === 'user' && item.content.trim().length > 0)
-        .slice(-12)
+        .filter((item) => (
+          (item.sender === 'user' || item.sender === 'bot') &&
+          item.content.trim().length > 0
+        ))
+        .slice(-14)
         .map((item) => ({
-          role: 'user',
-          content: item.content.trim()
+          role: item.sender === 'bot' ? 'assistant' : 'user',
+          content: item.content.trim().slice(0, 1500)
         }));
+    }
+
+    async requestLiteFallbackPayload(messageText, topicKey, skipTopicMismatch, fallbackErrorText) {
+      const liteEndpoint = String(this.restEndpointLite || '').trim();
+      const mainEndpoint = String(this.restEndpoint || '').trim();
+      if (!liteEndpoint || liteEndpoint === mainEndpoint) {
+        return null;
+      }
+
+      try {
+        const liteResponse = await fetchWithTimeout(liteEndpoint, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            message: messageText,
+            history: this.serializeHistoryForApi(),
+            topic: topicKey || this.selectedTopic,
+            skip_topic_mismatch: !!skipTopicMismatch
+          })
+        }, this.requestTimeoutMs);
+
+        const liteRaw = await liteResponse.text();
+        if (!liteResponse.ok || isCriticalHtmlPayload(liteRaw)) {
+          return null;
+        }
+
+        const payload = parseBotPayload(liteRaw);
+        const answer = String(payload.answer || '').trim();
+        if (!answer) {
+          return null;
+        }
+        return payload;
+      } catch (error) {
+        return null;
+      }
     }
 
     async requestBotPayload(messageText, topicKey, options) {
       const config = options && typeof options === 'object' ? options : {};
       const skipTopicMismatch = !!config.skipTopicMismatch;
+      const fallbackErrorText = this.i18n.api_error || 'Er ging iets mis met het ophalen van het antwoord.';
 
-      const response = await fetch(this.restEndpoint, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          message: messageText,
-          history: this.serializeHistoryForApi(),
-          topic: topicKey || this.selectedTopic,
-          skip_topic_mismatch: skipTopicMismatch
-        })
-      });
-
-      const raw = await response.text();
-      if (!response.ok || isCriticalHtmlPayload(raw)) {
-        throw new Error('runtime_html_error');
+      let response = null;
+      let raw = '';
+      try {
+        response = await fetchWithTimeout(this.restEndpoint, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            message: messageText,
+            history: this.serializeHistoryForApi(),
+            topic: topicKey || this.selectedTopic,
+            skip_topic_mismatch: skipTopicMismatch
+          })
+        }, this.requestTimeoutMs);
+        raw = await response.text();
+      } catch (error) {
+        const litePayload = await this.requestLiteFallbackPayload(messageText, topicKey, skipTopicMismatch, fallbackErrorText);
+        if (litePayload) {
+          return litePayload;
+        }
+        return {
+          answer: getApiErrorText(error, fallbackErrorText),
+          chatId: 0,
+          status: 'transport_error',
+          suggestedTopic: '',
+          currentTopic: this.selectedTopic || '',
+          primarySourceUrl: ''
+        };
       }
-      return parseBotPayload(raw);
+
+      if (isCriticalHtmlPayload(raw)) {
+        const litePayload = await this.requestLiteFallbackPayload(messageText, topicKey, skipTopicMismatch, fallbackErrorText);
+        if (litePayload) {
+          return litePayload;
+        }
+        return {
+          answer: fallbackErrorText,
+          chatId: 0,
+          status: 'runtime_html_error',
+          suggestedTopic: '',
+          currentTopic: this.selectedTopic || '',
+          primarySourceUrl: ''
+        };
+      }
+
+      if (!response.ok) {
+        const litePayload = await this.requestLiteFallbackPayload(messageText, topicKey, skipTopicMismatch, fallbackErrorText);
+        if (litePayload) {
+          return litePayload;
+        }
+
+        const serverMessage = parseApiErrorMessage(raw);
+        const statusCode = Number(response.status || 0);
+        const userMessage = serverMessage || (fallbackErrorText + (statusCode > 0 ? (' (HTTP ' + String(statusCode) + ')') : ''));
+        return {
+          answer: userMessage,
+          chatId: 0,
+          status: 'http_error',
+          suggestedTopic: '',
+          currentTopic: this.selectedTopic || '',
+          primarySourceUrl: ''
+        };
+      }
+
+      const payload = parseBotPayload(raw);
+      if (String(payload.answer || '').trim() === '') {
+        const litePayload = await this.requestLiteFallbackPayload(messageText, topicKey, skipTopicMismatch, fallbackErrorText);
+        if (litePayload) {
+          return litePayload;
+        }
+      }
+
+      return payload;
     }
 
     showWelcomeOnce(delayMs) {
@@ -1513,7 +1677,7 @@ document.addEventListener('DOMContentLoaded', function () {
         }
       } catch (error) {
         typing.remove();
-        this.addMessage(this.i18n.api_error || 'Er ging iets mis met het ophalen van het antwoord.', 'bot', { chatId: 0 });
+        this.addMessage(getApiErrorText(error, this.i18n.api_error || 'Er ging iets mis met het ophalen van het antwoord.'), 'bot', { chatId: 0 });
       } finally {
         this.setSendingState(false);
         this.updateComposerState();
@@ -1533,14 +1697,14 @@ document.addEventListener('DOMContentLoaded', function () {
       });
 
       try {
-        const response = await fetch(this.feedbackEndpoint, {
+        const response = await fetchWithTimeout(this.feedbackEndpoint, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             chat_id: chatId,
             feedback: feedback
           })
-        });
+        }, this.feedbackTimeoutMs);
 
         if (!response.ok) {
           throw new Error('feedback_failed');

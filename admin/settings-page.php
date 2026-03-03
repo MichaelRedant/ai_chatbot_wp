@@ -365,7 +365,7 @@ function octopus_ai_sanitize_quality_regression_min_cases($value) {
 
 function octopus_ai_get_quality_gate_thresholds() {
     return array(
-        'enabled' => ((int) get_option('octopus_ai_quality_gate_enabled', 1)) === 1,
+        'enabled' => ((int) get_option('octopus_ai_quality_gate_enabled', 0)) === 1,
         'min_pdf_coverage' => octopus_ai_sanitize_quality_percent(get_option('octopus_ai_quality_gate_min_pdf_coverage', 70)),
         'max_fallback_ratio' => octopus_ai_sanitize_quality_percent(get_option('octopus_ai_quality_gate_max_fallback_ratio', 35)),
         'max_stale_chunks' => octopus_ai_sanitize_quality_max_stale_chunks(get_option('octopus_ai_quality_gate_max_stale_chunks', 250)),

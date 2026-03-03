@@ -118,7 +118,7 @@ class SitemapParser {
     /**
      * Extraheer tekst met structuur i.p.v. een grote platte blob.
      */
-    private function extractMainTextForChunking(\DOMXPath $xpath, \DOMNode $mainNode) {
+    private function extractMainTextForChunking(\DOMXPath $xpath, \DOMNode $mainNode, $page_url = '') {
         $parts = [];
         $nodes = $xpath->query('.//h1|.//h2|.//h3|.//h4|.//p|.//li|.//dt|.//dd|.//td|.//th', $mainNode);
 
@@ -131,6 +131,38 @@ class SitemapParser {
                 $line = $this->normalizeMainTextLine($node->textContent);
                 if ($line === '') {
                     continue;
+                }
+
+                if ($node instanceof \DOMElement) {
+                    $hrefs = [];
+                    $anchors = $xpath->query('.//a[@href]', $node);
+                    if ($anchors instanceof \DOMNodeList && $anchors->length > 0) {
+                        foreach ($anchors as $anchor) {
+                            if (!$anchor instanceof \DOMElement || !$anchor->hasAttribute('href')) {
+                                continue;
+                            }
+
+                            $href_raw = trim((string) $anchor->getAttribute('href'));
+                            if ($href_raw === '') {
+                                continue;
+                            }
+
+                            $resolved = $this->resolveRelativeUrl((string) $page_url, $href_raw);
+                            $href_value = $resolved !== '' ? $resolved : $href_raw;
+                            if ($href_value === '' || in_array($href_value, $hrefs, true)) {
+                                continue;
+                            }
+
+                            $hrefs[] = $href_value;
+                            if (count($hrefs) >= 2) {
+                                break;
+                            }
+                        }
+                    }
+
+                    if (!empty($hrefs)) {
+                        $line .= ' (' . implode(' | ', $hrefs) . ')';
+                    }
                 }
 
                 $name = strtolower((string) $node->nodeName);
@@ -408,7 +440,7 @@ class SitemapParser {
             $section_title = $titleNode ? trim($titleNode->textContent) : '';
 
 
-            $base_text = $this->extractMainTextForChunking($xpath, $mainNode);
+            $base_text = $this->extractMainTextForChunking($xpath, $mainNode, (string) $final_url);
             $navigation_terms = $this->extractNavigationSearchTerms($xpath, (string) $final_url);
             $text = trim((string) $base_text);
 

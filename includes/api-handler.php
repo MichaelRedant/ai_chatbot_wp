@@ -80,6 +80,12 @@ add_action('rest_api_init', function () {
         'permission_callback' => '__return_true'
     ));
 
+    register_rest_route('octopus-ai/v1', '/chatbot-lite', array(
+        'methods' => 'POST',
+        'callback' => 'octopus_ai_chatbot_lite_callback',
+        'permission_callback' => '__return_true'
+    ));
+
     register_rest_route('octopus-ai/v1', '/feedback', array(
         'methods'  => 'POST',
         'callback' => 'octopus_ai_save_feedback',
@@ -87,15 +93,822 @@ add_action('rest_api_init', function () {
     ));
 });
 
+if (!function_exists('octopus_ai_chatbot_lite_callback')) {
+    /**
+     * Lichtgewicht failover-endpoint voor omgevingen waar de hoofdroute HTTP 500 geeft.
+     * Geeft altijd een bruikbare fallback met links terug.
+     *
+     * @param WP_REST_Request $request
+     * @return WP_REST_Response
+     */
+    function octopus_ai_chatbot_lite_callback($request)
+    {
+        try {
+            $lang = function_exists('octopus_ai_get_request_language')
+                ? octopus_ai_get_request_language()
+                : 'NL';
+            $message = sanitize_text_field((string) $request->get_param('message'));
+            $topic = sanitize_key((string) $request->get_param('topic'));
+
+            $fallback_default = ($lang === 'FR')
+                ? "Desole, je ne peux pas t'aider avec ca."
+                : get_option('octopus_ai_fallback', 'Sorry, daar kan ik je niet mee helpen.');
+            $fallback = function_exists('octopus_ai_get_provider_fallback_text')
+                ? octopus_ai_get_provider_fallback_text($lang, $fallback_default)
+                : $fallback_default;
+            $handoff_url = function_exists('octopus_ai_get_handoff_url')
+                ? octopus_ai_get_handoff_url($lang)
+                : '';
+
+            $include_reference_links = (bool) apply_filters(
+                'octopus_ai_chatbot_lite_include_reference_links',
+                false,
+                $lang,
+                $topic,
+                $message
+            );
+
+            $selected_reference_links = [];
+            if ($include_reference_links) {
+                $reference_candidates = function_exists('octopus_ai_select_topic_reference_links')
+                    ? octopus_ai_select_topic_reference_links($message, $topic, $lang, 3)
+                    : [];
+                $selected_reference_links = function_exists('octopus_ai_select_top_reference_links')
+                    ? octopus_ai_select_top_reference_links($reference_candidates, $lang, 2)
+                    : [];
+            }
+
+            if (function_exists('octopus_ai_build_no_solution_answer')) {
+                $answer = octopus_ai_build_no_solution_answer(
+                    $lang,
+                    $message,
+                    $fallback,
+                    [
+                        'references' => $selected_reference_links,
+                        'handoff_url' => $handoff_url,
+                    ]
+                );
+            } else {
+                $answer = $fallback;
+            }
+
+            $notice = ($lang === 'FR')
+                ? "Mode degrade active: voici les meilleurs liens disponibles."
+                : 'Noodmodus actief: hieronder de best beschikbare links.';
+            $answer = $notice . "\n\n" . ltrim((string) $answer);
+            if (function_exists('octopus_ai_sanitize_answer_output')) {
+                $answer = octopus_ai_sanitize_answer_output($answer);
+            }
+
+            if (function_exists('delete_transient')) {
+                delete_transient('octopus_ai_last_fatal_error');
+            }
+
+            return rest_ensure_response([
+                'answer' => (string) $answer,
+                'chat_id' => 0,
+                'status' => 'lite_fallback',
+                'confidence' => 0.0,
+                'reference_links' => is_array($selected_reference_links) ? $selected_reference_links : [],
+                'suggested_topic' => '',
+                'current_topic' => $topic,
+                'primary_source_url' => (
+                    is_array($selected_reference_links) &&
+                    isset($selected_reference_links[0]['url']) &&
+                    is_string($selected_reference_links[0]['url'])
+                ) ? esc_url_raw((string) $selected_reference_links[0]['url']) : '',
+            ]);
+        } catch (Throwable $exception) {
+            error_log('[Octopus AI] Lite callback fout: ' . $exception->getMessage());
+            $lang = function_exists('octopus_ai_get_request_language')
+                ? octopus_ai_get_request_language()
+                : 'NL';
+            $answer = ($lang === 'FR')
+                ? "Une erreur technique persiste. Consulte la documentation principale."
+                : 'Er blijft een technische fout. Bekijk de hoofddocumentatie.';
+
+            return rest_ensure_response([
+                'answer' => $answer,
+                'chat_id' => 0,
+                'status' => 'lite_error',
+                'confidence' => 0.0,
+                'reference_links' => [],
+                'suggested_topic' => '',
+                'current_topic' => '',
+                'primary_source_url' => function_exists('octopus_ai_get_handoff_url')
+                    ? esc_url_raw((string) octopus_ai_get_handoff_url($lang))
+                    : '',
+            ]);
+        }
+    }
+}
+
+if (!function_exists('octopus_ai_chatbot_safe_mode_enabled')) {
+    /**
+     * Safe mode houdt de hoofd-chatroute licht en productie-stabiel.
+     * Standaard aan om 500/fatals op hosts met strikte runtime-limieten te voorkomen.
+     *
+     * @param WP_REST_Request|null $request
+     * @return bool
+     */
+    function octopus_ai_chatbot_safe_mode_enabled($request = null)
+    {
+        $enabled = apply_filters('octopus_ai_chatbot_safe_mode_enabled', true, $request);
+        return (bool) $enabled;
+    }
+}
+
+if (!function_exists('octopus_ai_chatbot_safe_callback')) {
+    /**
+     * Lightweight maar inhoudelijke chatbot callback voor productie.
+     * Vermijdt zware URL-validaties en dure live-crawl-paden in het hoofdendpoint.
+     *
+     * @param WP_REST_Request $request
+     * @return WP_REST_Response|WP_Error
+     */
+    function octopus_ai_chatbot_safe_callback($request)
+    {
+        try {
+            if (function_exists('set_time_limit')) {
+                @set_time_limit(25);
+            }
+            @ini_set('max_execution_time', '25');
+
+            $lang = function_exists('octopus_ai_get_request_language')
+                ? octopus_ai_get_request_language()
+                : 'NL';
+            $message = sanitize_text_field((string) $request->get_param('message'));
+            $history = octopus_ai_sanitize_client_history($request->get_param('history') ?? [], 8);
+            $topic = sanitize_key((string) $request->get_param('topic'));
+
+            if ($message === '') {
+                return new WP_Error('octopus_ai_empty_message', __('Leeg bericht ontvangen.', 'octopus-ai'), ['status' => 400]);
+            }
+
+            $message_length = function_exists('octopus_ai_string_length')
+                ? octopus_ai_string_length($message)
+                : strlen((string) $message);
+            if ($message_length > 1500) {
+                return new WP_Error('octopus_ai_message_too_long', __('Bericht is te lang. Hou het onder 1500 tekens.', 'octopus-ai'), ['status' => 400]);
+            }
+
+            $rate_limit = octopus_ai_check_rate_limit('chatbot', 20, 5 * MINUTE_IN_SECONDS);
+            if (is_wp_error($rate_limit)) {
+                return $rate_limit;
+            }
+
+            $allowed_topics = function_exists('octopus_ai_get_provider_allowed_topics')
+                ? octopus_ai_get_provider_allowed_topics()
+                : [];
+            if (empty($allowed_topics)) {
+                $topic_terms_map = function_exists('octopus_ai_get_topic_terms_map')
+                    ? octopus_ai_get_topic_terms_map()
+                    : [];
+                $allowed_topics = array_values(array_filter(array_map('sanitize_key', array_keys(is_array($topic_terms_map) ? $topic_terms_map : []))));
+            }
+            if (!in_array($topic, $allowed_topics, true)) {
+                $topic = '';
+            }
+
+            $selected_topic = $topic;
+            $effective_topic = $topic;
+
+            $effective_query_data = function_exists('octopus_ai_get_effective_retrieval_message')
+                ? octopus_ai_get_effective_retrieval_message($message, $history, $lang)
+                : ['query' => $message, 'used_history' => false, 'previous_user_message' => ''];
+            $retrieval_query = trim((string) ($effective_query_data['query'] ?? $message));
+            if ($retrieval_query === '') {
+                $retrieval_query = $message;
+            }
+            $reference_query = trim((string) ($effective_query_data['previous_user_message'] ?? ''));
+            if ($reference_query === '') {
+                $reference_query = $message;
+            }
+
+            if (octopus_ai_is_3d_printing_question($message)) {
+                $easter_egg_answer = octopus_ai_get_3d_printing_easter_egg_answer($lang);
+                $easter_egg_answer = octopus_ai_sanitize_answer_output($easter_egg_answer);
+
+                return rest_ensure_response([
+                    'answer' => $easter_egg_answer,
+                    'chat_id' => 0,
+                    'status' => 'easter_egg_3d',
+                    'confidence' => 1.0,
+                    'reference_links' => [],
+                    'suggested_topic' => '',
+                    'current_topic' => $selected_topic,
+                    'primary_source_url' => 'https://x3dprints.be',
+                ]);
+            }
+
+            $retrieval_topic = $effective_topic;
+            if ($retrieval_topic === '' && function_exists('octopus_ai_detect_topic_for_retrieval')) {
+                $detected_topic = sanitize_key((string) octopus_ai_detect_topic_for_retrieval($retrieval_query));
+                if (in_array($detected_topic, $allowed_topics, true)) {
+                    $retrieval_topic = $detected_topic;
+                }
+            }
+
+            $skip_topic_mismatch_raw = $request->get_param('skip_topic_mismatch');
+            $skip_topic_mismatch = false;
+            if (is_bool($skip_topic_mismatch_raw)) {
+                $skip_topic_mismatch = $skip_topic_mismatch_raw;
+            } else {
+                $skip_topic_mismatch = in_array(
+                    strtolower(trim((string) $skip_topic_mismatch_raw)),
+                    array('1', 'true', 'yes', 'on'),
+                    true
+                );
+            }
+
+            $topic_mismatch = (!$skip_topic_mismatch) ? octopus_ai_detect_topic_mismatch($message, $selected_topic, $history) : '';
+            $topic_mismatch_notice = '';
+            if ($topic_mismatch !== '') {
+                $current_label = octopus_ai_get_topic_label($selected_topic, $lang);
+                $suggested_label = octopus_ai_get_topic_label($topic_mismatch, $lang);
+                $topic_mismatch_notice = ($lang === 'FR')
+                    ? sprintf(
+                        "Tu es actuellement dans le flux %s, mais ta question semble concerner %s. Souhaites-tu basculer vers ce flux ?",
+                        $current_label,
+                        $suggested_label
+                    )
+                    : sprintf(
+                        "Je zit momenteel in de flow %s, maar je vraag lijkt over %s te gaan. Wil je overschakelen naar die flow?",
+                        $current_label,
+                        $suggested_label
+                    );
+                $topic_mismatch_notice = octopus_ai_apply_language_glossary($topic_mismatch_notice, $lang);
+
+                if ($effective_topic === '') {
+                    $retrieval_topic = $topic_mismatch;
+                }
+            }
+
+            if (!octopus_ai_is_in_scope_question($message, $selected_topic, $history)) {
+                $out_of_scope_default = ($lang === 'FR')
+                    ? 'Desole, je reponds uniquement aux questions liees a Octopus.'
+                    : 'Sorry, ik beantwoord enkel vragen die over Octopus gaan.';
+                $out_of_scope_answer = function_exists('octopus_ai_get_provider_out_of_scope_text')
+                    ? octopus_ai_get_provider_out_of_scope_text($lang, $out_of_scope_default)
+                    : $out_of_scope_default;
+                $out_of_scope_answer = octopus_ai_apply_language_glossary($out_of_scope_answer, $lang);
+                $out_of_scope_answer = octopus_ai_sanitize_answer_output($out_of_scope_answer);
+
+                return rest_ensure_response([
+                    'answer' => $out_of_scope_answer,
+                    'chat_id' => 0,
+                    'status' => 'out_of_scope',
+                    'confidence' => 1.0,
+                    'reference_links' => [],
+                    'suggested_topic' => $topic_mismatch,
+                    'current_topic' => $selected_topic,
+                    'primary_source_url' => '',
+                ]);
+            }
+
+            $fallback_default = ($lang === 'FR')
+                ? "Desole, je ne peux pas t'aider avec ca."
+                : get_option('octopus_ai_fallback', 'Sorry, daar kan ik je niet mee helpen.');
+            $fallback = function_exists('octopus_ai_get_provider_fallback_text')
+                ? octopus_ai_get_provider_fallback_text($lang, $fallback_default)
+                : $fallback_default;
+
+            $api_key = trim((string) get_option('octopus_ai_api_key'));
+            if ($api_key === '') {
+                $config_notice = ($lang === 'FR')
+                    ? "La configuration du chatbot est incomplete. Merci de verifier la cle API dans les reglages."
+                    : 'De chatbotconfiguratie is onvolledig. Controleer de API-key in de instellingen.';
+                $missing_key_answer = octopus_ai_build_no_solution_answer(
+                    $lang,
+                    $reference_query !== '' ? $reference_query : $message,
+                    $fallback,
+                    [
+                        'references' => [],
+                        'handoff_url' => function_exists('octopus_ai_get_handoff_url') ? octopus_ai_get_handoff_url($lang) : '',
+                    ]
+                );
+                $missing_key_answer = $config_notice . "\n\n" . ltrim((string) $missing_key_answer);
+                $missing_key_answer = octopus_ai_sanitize_answer_output($missing_key_answer);
+
+                return rest_ensure_response([
+                    'answer' => $missing_key_answer,
+                    'chat_id' => 0,
+                    'status' => 'config_error_missing_api_key',
+                    'confidence' => 0.0,
+                    'reference_links' => [],
+                    'suggested_topic' => $topic_mismatch,
+                    'current_topic' => $selected_topic,
+                    'primary_source_url' => '',
+                ]);
+            }
+
+            $model = get_option('octopus_ai_model', 'gpt-4.1-mini');
+            $context = '';
+            $metadata_chunks = [];
+            $extract_metadata_chunks = static function ($result) {
+                if (!is_array($result)) {
+                    return [];
+                }
+                if (isset($result['metadata']['chunks']) && is_array($result['metadata']['chunks'])) {
+                    return $result['metadata']['chunks'];
+                }
+                if (isset($result['metadatas']) && is_array($result['metadatas'])) {
+                    return $result['metadatas'];
+                }
+                if (isset($result['metas']) && is_array($result['metas'])) {
+                    return $result['metas'];
+                }
+                return [];
+            };
+
+            if (function_exists('octopus_ai_retrieve_relevant_chunks')) {
+                $candidates = [];
+                if ($effective_topic !== '') {
+                    $candidates[] = $effective_topic;
+                } else {
+                    if ($retrieval_topic !== '') {
+                        $candidates[] = $retrieval_topic;
+                    }
+                    $candidates[] = '';
+                }
+                $candidates = array_values(array_unique(array_map('sanitize_key', $candidates)));
+
+                foreach ($candidates as $candidate_topic) {
+                    $result = octopus_ai_retrieve_relevant_chunks($retrieval_query, $candidate_topic);
+                    $candidate_context = trim((string) ($result['context'] ?? ''));
+                    $candidate_metadata = $extract_metadata_chunks($result);
+                    if ($candidate_context === '' && empty($candidate_metadata)) {
+                        continue;
+                    }
+                    $context = $candidate_context;
+                    $metadata_chunks = $candidate_metadata;
+                    if ($candidate_topic !== '') {
+                        $retrieval_topic = $candidate_topic;
+                    }
+                    break;
+                }
+            }
+
+            $relevant_found = (trim((string) $context) !== '' && strlen((string) $context) > 20) || !empty($metadata_chunks);
+            $topic_for_reference = $effective_topic !== '' ? $effective_topic : $retrieval_topic;
+            $selected_reference_links = [];
+            $include_reference_links = (bool) apply_filters(
+                'octopus_ai_safe_chat_include_reference_links',
+                false,
+                $lang,
+                $topic_for_reference,
+                $reference_query
+            );
+            if ($include_reference_links) {
+                $reference_candidates = function_exists('octopus_ai_select_topic_reference_links')
+                    ? octopus_ai_select_topic_reference_links($reference_query, $topic_for_reference, $lang, 3)
+                    : [];
+                $selected_reference_links = function_exists('octopus_ai_select_top_reference_links')
+                    ? octopus_ai_select_top_reference_links($reference_candidates, $lang, 2)
+                    : [];
+            }
+
+            if (!$relevant_found) {
+                $fallback_answer = octopus_ai_build_no_solution_answer(
+                    $lang,
+                    $reference_query,
+                    $fallback,
+                    [
+                        'references' => $selected_reference_links,
+                        'handoff_url' => function_exists('octopus_ai_get_handoff_url') ? octopus_ai_get_handoff_url($lang) : '',
+                    ]
+                );
+                if ($topic_mismatch_notice !== '') {
+                    $fallback_answer = rtrim((string) $fallback_answer) . "\n\n" . $topic_mismatch_notice;
+                }
+                $fallback_answer = octopus_ai_sanitize_answer_output($fallback_answer);
+
+                return rest_ensure_response([
+                    'answer' => $fallback_answer,
+                    'chat_id' => 0,
+                    'status' => 'fallback',
+                    'confidence' => 0.0,
+                    'reference_links' => $selected_reference_links,
+                    'suggested_topic' => $topic_mismatch,
+                    'current_topic' => $selected_topic,
+                    'primary_source_url' => (
+                        is_array($selected_reference_links) &&
+                        isset($selected_reference_links[0]['url']) &&
+                        is_string($selected_reference_links[0]['url'])
+                    ) ? esc_url_raw((string) $selected_reference_links[0]['url']) : '',
+                ]);
+            }
+
+            $default_tone = ($lang === 'FR')
+                ? 'Tu aides les utilisateurs d Octopus de maniere claire et concise. Utilise uniquement le contexte fourni.'
+                : 'Je helpt gebruikers van Octopus duidelijk en kort. Gebruik enkel de meegegeven context.';
+            $tone = trim((string) get_option('octopus_ai_tone', $default_tone));
+            if ($tone === '') {
+                $tone = $default_tone;
+            }
+
+            $system_prompt = $tone;
+            if ($topic_for_reference !== '') {
+                $system_prompt .= "\n\nActieve flow: " . octopus_ai_get_topic_label($topic_for_reference, $lang) . '.';
+            }
+            if ($context !== '') {
+                $system_prompt .= "\n\nContext:\n" . $context;
+            }
+            $strict_no_solution = octopus_ai_get_no_solution_message($lang, $fallback);
+            $strict_rule = ($lang === 'FR')
+                ? "Regle anti-hallucination: n'invente rien. Si la solution n'est pas explicitement presente dans le contexte, reponds exactement: \"" . $strict_no_solution . "\""
+                : "Strikte anti-hallucinatie regel: verzin niets. Als de oplossing niet expliciet in de context staat, antwoord exact: \"" . $strict_no_solution . "\"";
+            $system_prompt .= "\n\n" . $strict_rule;
+
+            if (!empty($effective_query_data['used_history']) && !empty($effective_query_data['previous_user_message'])) {
+                $previous_user_message = sanitize_textarea_field((string) $effective_query_data['previous_user_message']);
+                $system_prompt .= ($lang === 'FR')
+                    ? ("\n\nQuestion precedente: " . $previous_user_message . "\nTraite le nouveau message comme une suite contextuelle.")
+                    : ("\n\nVorige vraag: " . $previous_user_message . "\nBehandel het nieuwe bericht als contextueel vervolg.");
+            }
+            if (!empty($effective_query_data['used_history'])) {
+                $system_prompt .= ($lang === 'FR')
+                    ? "\n\nRegle de suivi: n'explique pas a nouveau les etapes deja traitees juste avant. Donne uniquement la suite utile, les differences ou les actions suivantes."
+                    : "\n\nVervolgregel: herhaal geen stappen die net al uitgelegd zijn. Geef alleen de ontbrekende vervolgstappen, verschillen of volgende acties.";
+            }
+            $history_has_assistant = false;
+            foreach ($history as $history_entry) {
+                if (!is_array($history_entry)) {
+                    continue;
+                }
+                $history_role = isset($history_entry['role']) ? strtolower(trim((string) $history_entry['role'])) : '';
+                if ($history_role === 'assistant' || $history_role === 'bot') {
+                    $history_has_assistant = true;
+                    break;
+                }
+            }
+            if ($history_has_assistant) {
+                $system_prompt .= ($lang === 'FR')
+                    ? "\n\nContexte de conversation: tiens compte des reponses precedentes du chatbot. Si l'utilisateur demande une suite, ne repete pas le bloc deja donne, sauf demande explicite de recapitulatif."
+                    : "\n\nGesprekscontext: hou rekening met eerdere chatbotantwoorden. Als de gebruiker om een vervolg vraagt, herhaal het vorige blok niet, tenzij expliciet om een samenvatting gevraagd wordt.";
+            }
+
+            $messages = [['role' => 'system', 'content' => $system_prompt]];
+            $current_message_present = false;
+            foreach ($history as $entry) {
+                if (!isset($entry['content'])) {
+                    continue;
+                }
+                $entry_role = isset($entry['role']) ? strtolower(trim((string) $entry['role'])) : 'user';
+                if ($entry_role === 'bot') {
+                    $entry_role = 'assistant';
+                }
+                if (!in_array($entry_role, ['user', 'assistant'], true)) {
+                    continue;
+                }
+                $content = sanitize_textarea_field((string) $entry['content']);
+                if ($content === '') {
+                    continue;
+                }
+                $messages[] = [
+                    'role' => $entry_role,
+                    'content' => $content,
+                ];
+                if ($entry_role === 'user' && $content === $message) {
+                    $current_message_present = true;
+                }
+            }
+            if (!$current_message_present) {
+                $messages[] = [
+                    'role' => 'user',
+                    'content' => $message,
+                ];
+            }
+
+            $openai_attempts = (int) apply_filters('octopus_ai_safe_chat_openai_attempts', 1, $lang, $model);
+            $openai_timeout = (int) apply_filters('octopus_ai_safe_chat_openai_timeout', 12, $lang, $model);
+            $openai_result = octopus_ai_openai_chat_completion_with_retry(
+                $api_key,
+                $messages,
+                $model,
+                $openai_attempts,
+                $openai_timeout
+            );
+            if (is_wp_error($openai_result)) {
+                $service_reason = $openai_result->get_error_message();
+                error_log('[Octopus AI] Safe callback OpenAI service fallback actief: ' . $service_reason);
+
+                $service_notice = ($lang === 'FR')
+                    ? "Je ne peux temporairement pas generer une reponse detaillee. Voici les liens les plus pertinents."
+                    : 'Ik kan tijdelijk geen gedetailleerd antwoord genereren. Hieronder staan de meest relevante links.';
+                $service_fallback = octopus_ai_build_no_solution_answer(
+                    $lang,
+                    $reference_query !== '' ? $reference_query : $message,
+                    $fallback,
+                    [
+                        'references' => $selected_reference_links,
+                        'handoff_url' => function_exists('octopus_ai_get_handoff_url') ? octopus_ai_get_handoff_url($lang) : '',
+                    ]
+                );
+                $service_fallback = $service_notice . "\n\n" . ltrim((string) $service_fallback);
+                if ($topic_mismatch_notice !== '') {
+                    $service_fallback = rtrim((string) $service_fallback) . "\n\n" . $topic_mismatch_notice;
+                }
+                $service_fallback = octopus_ai_sanitize_answer_output($service_fallback);
+
+                return rest_ensure_response([
+                    'answer' => $service_fallback,
+                    'chat_id' => 0,
+                    'status' => 'service_fallback',
+                    'confidence' => 0.0,
+                    'reference_links' => $selected_reference_links,
+                    'suggested_topic' => $topic_mismatch,
+                    'current_topic' => $selected_topic,
+                    'primary_source_url' => (
+                        is_array($selected_reference_links) &&
+                        isset($selected_reference_links[0]['url']) &&
+                        is_string($selected_reference_links[0]['url'])
+                    ) ? esc_url_raw((string) $selected_reference_links[0]['url']) : '',
+                ]);
+            }
+
+            $body = isset($openai_result['body']) && is_array($openai_result['body']) ? $openai_result['body'] : [];
+            $answer = $body['choices'][0]['message']['content'] ?? '';
+            if (!$answer) {
+                $error_message = $body['error']['message'] ?? 'Ongeldige API-respons.';
+                error_log('[Octopus AI] Safe callback lege OpenAI response: ' . $error_message);
+
+                $answer = octopus_ai_build_no_solution_answer(
+                    $lang,
+                    $reference_query,
+                    $fallback,
+                    [
+                        'references' => $selected_reference_links,
+                        'handoff_url' => function_exists('octopus_ai_get_handoff_url') ? octopus_ai_get_handoff_url($lang) : '',
+                    ]
+                );
+            }
+
+            $decoded_json = json_decode('"' . addcslashes((string) $answer, "\\\"\/\n\r\t") . '"');
+            if (is_string($decoded_json)) {
+                $answer = $decoded_json;
+            }
+
+            $answer = preg_replace_callback('/\\\\?u([0-9a-fA-F]{4})/', function ($matches) {
+                $hex = $matches[1];
+                $bin = pack('H*', $hex);
+                return function_exists('octopus_ai_utf16be_to_utf8')
+                    ? octopus_ai_utf16be_to_utf8($bin)
+                    : '';
+            }, (string) $answer);
+
+            $answer = function_exists('octopus_ai_normalize_utf8')
+                ? octopus_ai_normalize_utf8($answer)
+                : (string) $answer;
+            $answer = stripslashes((string) $answer);
+            $answer = html_entity_decode((string) $answer, ENT_QUOTES | ENT_HTML5, 'UTF-8');
+            $answer = wp_specialchars_decode((string) $answer, ENT_QUOTES);
+            $answer = octopus_ai_apply_language_glossary((string) $answer, $lang);
+            $answer = octopus_ai_sanitize_answer_output((string) $answer);
+
+            if (trim((string) $answer) === '' || trim((string) $answer) === trim((string) $fallback)) {
+                $answer = octopus_ai_build_no_solution_answer(
+                    $lang,
+                    $reference_query,
+                    $fallback,
+                    [
+                        'references' => $selected_reference_links,
+                        'handoff_url' => function_exists('octopus_ai_get_handoff_url') ? octopus_ai_get_handoff_url($lang) : '',
+                    ]
+                );
+            }
+
+            $has_manual_link = function_exists('octopus_ai_answer_contains_allowed_manual_link')
+                ? octopus_ai_answer_contains_allowed_manual_link($answer, $lang)
+                : false;
+            if (!$has_manual_link && !empty($selected_reference_links)) {
+                $heading = ($lang === 'FR') ? 'Liens utiles' : 'Handige links';
+                $answer = rtrim((string) $answer) . "\n\n{$heading}:\n";
+                foreach ($selected_reference_links as $ref) {
+                    if (!is_array($ref)) {
+                        continue;
+                    }
+                    $ref_title = sanitize_text_field((string) ($ref['title'] ?? ''));
+                    $ref_url = esc_url_raw((string) ($ref['url'] ?? ''));
+                    if ($ref_url === '') {
+                        continue;
+                    }
+                    if ($ref_title === '') {
+                        $ref_title = ($lang === 'FR') ? 'Voir dans le manuel' : 'Bekijk dit in de handleiding';
+                    }
+                    $answer .= '- [' . $ref_title . '](' . $ref_url . ')' . "\n";
+                }
+                $answer = rtrim((string) $answer);
+            }
+
+            if ($topic_mismatch_notice !== '') {
+                $answer = rtrim((string) $answer) . "\n\n" . $topic_mismatch_notice;
+            }
+
+            $answer = octopus_ai_sanitize_answer_output((string) $answer);
+
+            if (!function_exists('octopus_ai_log_interaction')) {
+                require_once plugin_dir_path(__FILE__) . 'logger.php';
+            }
+
+            $is_fallback = stripos((string) $answer, (string) $fallback) !== false || strlen(trim((string) $answer)) < 10;
+            $status = $is_fallback ? 'fail' : 'success';
+            $chat_id = 0;
+            if (function_exists('octopus_ai_log_interaction')) {
+                $context_length = strlen((string) $context);
+                $chat_id = (int) octopus_ai_log_interaction($message, $answer, $context_length, $status, '');
+            }
+
+            if (function_exists('delete_transient')) {
+                delete_transient('octopus_ai_last_fatal_error');
+            }
+
+            $confidence = $is_fallback ? 0.0 : (!empty($metadata_chunks) ? 0.78 : 0.62);
+
+            return rest_ensure_response([
+                'answer' => (string) $answer,
+                'chat_id' => $chat_id,
+                'status' => $status,
+                'confidence' => round((float) $confidence, 3),
+                'reference_links' => is_array($selected_reference_links) ? $selected_reference_links : [],
+                'suggested_topic' => $topic_mismatch,
+                'current_topic' => $selected_topic,
+                'primary_source_url' => (
+                    is_array($selected_reference_links) &&
+                    isset($selected_reference_links[0]['url']) &&
+                    is_string($selected_reference_links[0]['url'])
+                ) ? esc_url_raw((string) $selected_reference_links[0]['url']) : '',
+            ]);
+        } catch (Throwable $exception) {
+            error_log('[Octopus AI] Safe callback runtime-fout: ' . $exception->getMessage());
+
+            $runtime_lang = function_exists('octopus_ai_get_request_language')
+                ? octopus_ai_get_request_language()
+                : 'NL';
+            $runtime_message = '';
+            if (is_object($request) && method_exists($request, 'get_param')) {
+                $runtime_message = sanitize_text_field((string) $request->get_param('message'));
+            }
+
+            $runtime_fallback_default = ($runtime_lang === 'FR')
+                ? "Desole, je ne peux pas t'aider avec ca."
+                : get_option('octopus_ai_fallback', 'Sorry, daar kan ik je niet mee helpen.');
+            $runtime_fallback = function_exists('octopus_ai_get_provider_fallback_text')
+                ? octopus_ai_get_provider_fallback_text($runtime_lang, $runtime_fallback_default)
+                : $runtime_fallback_default;
+            $runtime_notice = ($runtime_lang === 'FR')
+                ? "Une erreur technique s'est produite. Voici les liens utiles disponibles."
+                : 'Er is een technische fout opgetreden. Hieronder staan nuttige beschikbare links.';
+
+            if (function_exists('octopus_ai_build_no_solution_answer')) {
+                $runtime_answer = octopus_ai_build_no_solution_answer(
+                    $runtime_lang,
+                    $runtime_message,
+                    $runtime_fallback,
+                    [
+                        'references' => [],
+                        'handoff_url' => function_exists('octopus_ai_get_handoff_url') ? octopus_ai_get_handoff_url($runtime_lang) : '',
+                    ]
+                );
+            } else {
+                $runtime_answer = $runtime_fallback;
+            }
+
+            $runtime_answer = $runtime_notice . "\n\n" . ltrim((string) $runtime_answer);
+            if (function_exists('octopus_ai_sanitize_answer_output')) {
+                $runtime_answer = octopus_ai_sanitize_answer_output($runtime_answer);
+            }
+
+            return rest_ensure_response([
+                'answer' => (string) $runtime_answer,
+                'chat_id' => 0,
+                'status' => 'runtime_fallback',
+                'confidence' => 0.0,
+                'reference_links' => [],
+                'suggested_topic' => '',
+                'current_topic' => '',
+                'primary_source_url' => '',
+            ]);
+        }
+    }
+}
+
+if (!function_exists('octopus_ai_convert_rest_chatbot_errors_to_fallback')) {
+    /**
+     * Zet WP_Error responses op de chatbot-route om naar een bruikbare fallback payload.
+     * Dit voorkomt frontend-hard-fails met HTTP 500 op productie.
+     *
+     * @param mixed            $response
+     * @param array            $handler
+     * @param WP_REST_Request  $request
+     * @return mixed
+     */
+    function octopus_ai_convert_rest_chatbot_errors_to_fallback($response, $handler, $request)
+    {
+        if (!($request instanceof WP_REST_Request)) {
+            return $response;
+        }
+
+        $route = (string) $request->get_route();
+        if ($route !== '/octopus-ai/v1/chatbot' && $route !== '/octopus-ai/v1/chatbot-lite') {
+            return $response;
+        }
+
+        if (!is_wp_error($response)) {
+            return $response;
+        }
+
+        $lang = function_exists('octopus_ai_get_request_language')
+            ? octopus_ai_get_request_language()
+            : 'NL';
+        $message = sanitize_text_field((string) $request->get_param('message'));
+
+        $fallback_default = ($lang === 'FR')
+            ? "Desole, je ne peux pas t'aider avec ca."
+            : get_option('octopus_ai_fallback', 'Sorry, daar kan ik je niet mee helpen.');
+        $fallback = function_exists('octopus_ai_get_provider_fallback_text')
+            ? octopus_ai_get_provider_fallback_text($lang, $fallback_default)
+            : $fallback_default;
+        $handoff_url = function_exists('octopus_ai_get_handoff_url')
+            ? octopus_ai_get_handoff_url($lang)
+            : '';
+
+        $raw_reason = sanitize_text_field((string) $response->get_error_message());
+        $runtime_notice = ($lang === 'FR')
+            ? "Une erreur technique est survenue. Je te partage les liens utiles disponibles."
+            : 'Er trad een technische fout op. Ik deel de beschikbare nuttige links.';
+
+        $answer = function_exists('octopus_ai_build_no_solution_answer')
+            ? octopus_ai_build_no_solution_answer(
+                $lang,
+                $message,
+                $fallback,
+                [
+                    'references' => [],
+                    'handoff_url' => $handoff_url,
+                ]
+            )
+            : $fallback;
+        $answer = $runtime_notice . "\n\n" . ltrim((string) $answer);
+        if (function_exists('octopus_ai_sanitize_answer_output')) {
+            $answer = octopus_ai_sanitize_answer_output($answer);
+        }
+
+        error_log('[Octopus AI] REST WP_Error omgezet naar chatbot fallback: ' . $raw_reason);
+
+        return new WP_REST_Response([
+            'answer' => (string) $answer,
+            'chat_id' => 0,
+            'status' => 'rest_error_fallback',
+            'confidence' => 0.0,
+            'reference_links' => [],
+            'suggested_topic' => '',
+            'current_topic' => '',
+            'primary_source_url' => '',
+            'error_reason' => $raw_reason,
+        ], 200);
+    }
+
+    add_filter('rest_request_after_callbacks', 'octopus_ai_convert_rest_chatbot_errors_to_fallback', 20, 3);
+}
+
 
 // ÃƒÆ’Ã‚Â¢Ãƒâ€¦Ã¢â‚¬Å“ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ Frontend instellingen beschikbaar maken via AJAX
 add_action('wp_ajax_octopus_ai_get_settings', 'octopus_ai_get_settings');
 add_action('wp_ajax_nopriv_octopus_ai_get_settings', 'octopus_ai_get_settings');
 
 function octopus_ai_is_valid_url($url) {
+    $url = esc_url_raw((string) $url);
+    if ($url === '') {
+        return false;
+    }
+
+    static $request_cache = [];
+    if (array_key_exists($url, $request_cache)) {
+        return (bool) $request_cache[$url];
+    }
+
+    if (
+        function_exists('octopus_ai_is_chatbot_rest_request') &&
+        octopus_ai_is_chatbot_rest_request()
+    ) {
+        $skip_remote_checks = (bool) apply_filters(
+            'octopus_ai_skip_remote_url_validation_in_chat',
+            true,
+            $url
+        );
+        if ($skip_remote_checks) {
+            $request_cache[$url] = true;
+            return true;
+        }
+    }
+
     $cache_key = 'octopus_ai_urlcheck_' . md5($url);
     $cached = get_transient($cache_key);
-    if (!is_null($cached)) return $cached;
+    if (!is_null($cached)) {
+        $request_cache[$url] = (bool) $cached;
+        return (bool) $cached;
+    }
 
     $response = wp_remote_head($url, [
         'timeout' => 5,
@@ -122,8 +935,9 @@ function octopus_ai_is_valid_url($url) {
         $is_valid = ($status >= 200 && $status < 400) || $status === 403;
     }
 
-    set_transient($cache_key, $is_valid, 12 * HOUR_IN_SECONDS);
-    return $is_valid;
+    $request_cache[$url] = (bool) $is_valid;
+    set_transient($cache_key, (bool) $is_valid, 12 * HOUR_IN_SECONDS);
+    return (bool) $is_valid;
 }
 
 
@@ -404,6 +1218,11 @@ if (!function_exists('octopus_ai_get_previous_user_message_for_context')) {
                 continue;
             }
 
+            $role = sanitize_key((string) ($entry['role'] ?? 'user'));
+            if ($role !== 'user') {
+                continue;
+            }
+
             $content = trim((string) ($entry['content'] ?? ''));
             if ($content === '') {
                 continue;
@@ -658,7 +1477,20 @@ if (!function_exists('octopus_ai_get_reference_query_terms')) {
             }
         }
 
-        if (function_exists('octopus_ai_extract_manual_query_terms')) {
+        $allow_manual_terms = true;
+        if (
+            function_exists('octopus_ai_is_chatbot_rest_request') &&
+            octopus_ai_is_chatbot_rest_request()
+        ) {
+            $allow_manual_terms = (bool) apply_filters(
+                'octopus_ai_reference_query_use_live_manual_terms_in_chat',
+                false,
+                $question,
+                $lang
+            );
+        }
+
+        if ($allow_manual_terms && function_exists('octopus_ai_extract_manual_query_terms')) {
             $manual_terms = octopus_ai_extract_manual_query_terms($question, $lang, 10);
             if (is_array($manual_terms)) {
                 foreach ($manual_terms as $manual_term) {
@@ -1844,8 +2676,12 @@ if (!function_exists('octopus_ai_sanitize_client_history')) {
                 continue;
             }
 
-            $role = isset($entry['role']) ? sanitize_text_field((string) $entry['role']) : '';
-            if ($role !== 'user') {
+            $raw_role = isset($entry['role']) ? sanitize_text_field((string) $entry['role']) : '';
+            $role = strtolower(trim((string) $raw_role));
+            if ($role === 'bot') {
+                $role = 'assistant';
+            }
+            if (!in_array($role, ['user', 'assistant'], true)) {
                 continue;
             }
 
@@ -1855,8 +2691,14 @@ if (!function_exists('octopus_ai_sanitize_client_history')) {
                 continue;
             }
 
+            if (function_exists('mb_substr')) {
+                $content = (string) mb_substr($content, 0, 1500);
+            } else {
+                $content = (string) substr($content, 0, 1500);
+            }
+
             $sanitized[] = [
-                'role' => 'user',
+                'role' => $role,
                 'content' => $content,
             ];
         }
@@ -1883,6 +2725,27 @@ if (!function_exists('octopus_ai_sanitize_answer_output')) {
             $answer = mb_substr($answer, 0, 8000);
         } else {
             $answer = substr($answer, 0, 8000);
+        }
+
+        // Verwijder eenvoudige dubbele labels/regels die UX vervuilen.
+        $answer = preg_replace('/\b(Bekijk dit in de handleiding)(\s+\1)+\b/ui', '$1', (string) $answer);
+        $answer = preg_replace('/\b(Voir dans le manuel)(\s+\1)+\b/ui', '$1', (string) $answer);
+
+        $lines = preg_split('/\n/u', (string) $answer);
+        if (is_array($lines) && !empty($lines)) {
+            $cleaned_lines = [];
+            $previous_key = '';
+            foreach ($lines as $line) {
+                $line = rtrim((string) $line);
+                $line_key = strtolower(trim((string) preg_replace('/\s+/u', ' ', $line)));
+                if ($line_key !== '' && $line_key === $previous_key) {
+                    continue;
+                }
+                $cleaned_lines[] = $line;
+                $previous_key = $line_key;
+            }
+            $answer = implode("\n", $cleaned_lines);
+            $answer = preg_replace("/\n{3,}/", "\n\n", (string) $answer);
         }
 
         return trim($answer);
@@ -1961,8 +2824,11 @@ if (!function_exists('octopus_ai_is_retryable_openai_status')) {
 }
 
 if (!function_exists('octopus_ai_openai_chat_completion_with_retry')) {
-    function octopus_ai_openai_chat_completion_with_retry($api_key, array $messages, $model, $max_attempts = 3)
+    function octopus_ai_openai_chat_completion_with_retry($api_key, array $messages, $model, $max_attempts = 3, $timeout_seconds = 20)
     {
+        $max_attempts = max(1, min(3, (int) $max_attempts));
+        $timeout_seconds = max(5, min(30, (int) $timeout_seconds));
+
         $circuit = octopus_ai_get_openai_circuit_state();
         if ((int) $circuit['open_until'] > time()) {
             $remaining = max(1, (int) $circuit['open_until'] - time());
@@ -1991,7 +2857,7 @@ if (!function_exists('octopus_ai_openai_chat_completion_with_retry')) {
                     'model' => $model,
                     'messages' => $messages,
                 ]),
-                'timeout' => 20,
+                'timeout' => $timeout_seconds,
             ]);
 
             if (is_wp_error($response)) {
@@ -2059,7 +2925,16 @@ if (!function_exists('octopus_ai_openai_chat_completion_with_retry')) {
 // ÃƒÆ’Ã‚Â¢Ãƒâ€¦Ã¢â‚¬Å“ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ Chatbot callback
 function octopus_ai_chatbot_callback($request)
 {
+    if (function_exists('octopus_ai_chatbot_safe_callback')) {
+        return octopus_ai_chatbot_safe_callback($request);
+    }
+
     try {
+    if (function_exists('set_time_limit')) {
+        @set_time_limit(55);
+    }
+    @ini_set('max_execution_time', '55');
+
     $message = sanitize_text_field((string) $request->get_param('message'));
     $history = octopus_ai_sanitize_client_history($request->get_param('history') ?? [], 10);
     $topic = sanitize_key((string) $request->get_param('topic'));
@@ -2189,6 +3064,72 @@ function octopus_ai_chatbot_callback($request)
     $use_live_manual = in_array($manual_mode, ['live', 'hybrid'], true);
     $use_local_chunks = $manual_mode !== 'live';
 
+    $disable_live_manual_for_chat = (bool) apply_filters(
+        'octopus_ai_disable_live_manual_for_chat_requests',
+        true,
+        $manual_mode,
+        $source_strategy,
+        $lang
+    );
+    if ($disable_live_manual_for_chat) {
+        $use_live_manual = false;
+        $use_local_chunks = true;
+        if ($source_strategy === 'live_manual') {
+            $source_strategy = 'manual_upload';
+        }
+    }
+
+    if (
+        $use_live_manual &&
+        function_exists('octopus_ai_is_chatbot_rest_request') &&
+        octopus_ai_is_chatbot_rest_request() &&
+        function_exists('octopus_ai_live_manual_enabled_for_chat_requests') &&
+        !octopus_ai_live_manual_enabled_for_chat_requests($lang, $retrieval_query)
+    ) {
+        $use_live_manual = false;
+        $use_local_chunks = true;
+        if ($source_strategy === 'live_manual') {
+            $source_strategy = 'manual_upload';
+        }
+    }
+
+    if ($use_live_manual) {
+        $live_memory_limit = function_exists('octopus_ai_live_manual_get_memory_limit_bytes')
+            ? (int) octopus_ai_live_manual_get_memory_limit_bytes()
+            : (function_exists('octopus_ai_get_memory_limit_bytes') ? (int) octopus_ai_get_memory_limit_bytes() : 0);
+        $live_max_execution = function_exists('octopus_ai_live_manual_get_max_execution_time_seconds')
+            ? (int) octopus_ai_live_manual_get_max_execution_time_seconds()
+            : (is_numeric(ini_get('max_execution_time')) ? (int) ini_get('max_execution_time') : 0);
+        $low_runtime_budget = (
+            ($live_max_execution > 0 && $live_max_execution <= 30) ||
+            ($live_memory_limit > 0 && $live_memory_limit < (320 * 1024 * 1024))
+        );
+
+        $force_local_on_low_budget = (bool) apply_filters(
+            'octopus_ai_force_local_chunks_on_low_runtime_budget',
+            true,
+            $manual_mode,
+            $source_strategy,
+            $live_max_execution,
+            $live_memory_limit
+        );
+
+        if ($low_runtime_budget && $force_local_on_low_budget) {
+            $use_live_manual = false;
+            $use_local_chunks = true;
+            if ($source_strategy === 'live_manual') {
+                $source_strategy = 'manual_upload';
+            }
+            error_log(
+                sprintf(
+                    '[Octopus AI] Live manual tijdelijk uitgeschakeld door runtime-limiet (max_execution_time=%d, memory_limit=%d).',
+                    $live_max_execution,
+                    $live_memory_limit
+                )
+            );
+        }
+    }
+
     $api_key = trim((string) get_option('octopus_ai_api_key'));
     if ($lang === 'FR') {
     $tone = <<<EOT
@@ -2272,10 +3213,31 @@ EOT;
         : $fallback_default;
 
     if ($api_key === '') {
-        return new WP_Error(
-            'octopus_ai_missing_api_key',
-            __('Octopus AI API key ontbreekt. Voeg een geldige key toe op de instellingenpagina.', 'octopus-ai')
+        $config_notice = ($lang === 'FR')
+            ? "La configuration du chatbot est incomplete. Merci de verifier la cle API dans les reglages."
+            : 'De chatbotconfiguratie is onvolledig. Controleer de API-key in de instellingen.';
+        $missing_key_answer = octopus_ai_build_no_solution_answer(
+            $lang,
+            $reference_query !== '' ? $reference_query : $message,
+            $fallback,
+            [
+                'references' => [],
+                'handoff_url' => function_exists('octopus_ai_get_handoff_url') ? octopus_ai_get_handoff_url($lang) : '',
+            ]
         );
+        $missing_key_answer = $config_notice . "\n\n" . ltrim((string) $missing_key_answer);
+        $missing_key_answer = octopus_ai_sanitize_answer_output($missing_key_answer);
+
+        return rest_ensure_response([
+            'answer' => $missing_key_answer,
+            'chat_id' => 0,
+            'status' => 'config_error_missing_api_key',
+            'confidence' => 0.0,
+            'reference_links' => [],
+            'suggested_topic' => $topic_mismatch,
+            'current_topic' => $selected_topic,
+            'primary_source_url' => '',
+        ]);
     }
 
     $model = get_option('octopus_ai_model', 'gpt-4.1-mini');
@@ -3103,21 +4065,98 @@ EOT;
         ]);
     }
 
+    $build_service_fallback_response = static function ($reason = '') use (
+        $lang,
+        $message,
+        $reference_query,
+        $fallback,
+        $selected_reference_links,
+        $topic_mismatch_notice,
+        $topic_mismatch,
+        $selected_topic,
+        $context,
+        $live_context,
+        $confidence_score
+    ) {
+        $service_notice = ($lang === 'FR')
+            ? "Je ne peux temporairement pas generer une reponse detaillee. Voici les liens les plus pertinents."
+            : 'Ik kan tijdelijk geen gedetailleerd antwoord genereren. Hieronder staan de meest relevante links.';
+
+        $fallback_answer = octopus_ai_build_no_solution_answer(
+            $lang,
+            $reference_query !== '' ? $reference_query : $message,
+            $fallback,
+            [
+                'references' => $selected_reference_links,
+                'handoff_url' => function_exists('octopus_ai_get_handoff_url') ? octopus_ai_get_handoff_url($lang) : '',
+            ]
+        );
+
+        if ($fallback_answer !== '') {
+            $fallback_answer = $service_notice . "\n\n" . ltrim((string) $fallback_answer);
+        } else {
+            $fallback_answer = $service_notice;
+        }
+
+        if ($topic_mismatch_notice !== '') {
+            $fallback_answer = rtrim((string) $fallback_answer) . "\n\n" . $topic_mismatch_notice;
+        }
+
+        $fallback_answer = octopus_ai_sanitize_answer_output($fallback_answer);
+
+        if (!function_exists('octopus_ai_log_interaction')) {
+            require_once plugin_dir_path(__FILE__) . 'logger.php';
+        }
+
+        $chat_id = 0;
+        if (function_exists('octopus_ai_log_interaction')) {
+            $context_length = strlen((string) $context) + strlen((string) $live_context);
+            $error_message = wp_json_encode([
+                'reason' => 'openai_service_fallback',
+                'detail' => sanitize_text_field((string) $reason),
+            ]);
+            $chat_id = (int) octopus_ai_log_interaction($message, $fallback_answer, $context_length, 'fail', (string) $error_message);
+        }
+
+        return rest_ensure_response([
+            'answer' => $fallback_answer,
+            'chat_id' => $chat_id,
+            'status' => 'service_fallback',
+            'confidence' => round((float) $confidence_score, 3),
+            'reference_links' => is_array($selected_reference_links) ? $selected_reference_links : [],
+            'suggested_topic' => $topic_mismatch,
+            'current_topic' => $selected_topic,
+            'primary_source_url' => (
+                is_array($selected_reference_links) &&
+                isset($selected_reference_links[0]['url']) &&
+                is_string($selected_reference_links[0]['url'])
+            ) ? esc_url_raw((string) $selected_reference_links[0]['url']) : '',
+        ]);
+    };
+
     $messages = [['role' => 'system', 'content' => $system_prompt]];
     $current_message_present = false;
     foreach ($history as $entry) {
         if (isset($entry['content'])) {
+            $entry_role = isset($entry['role']) ? strtolower(trim((string) $entry['role'])) : 'user';
+            if ($entry_role === 'bot') {
+                $entry_role = 'assistant';
+            }
+            if (!in_array($entry_role, ['user', 'assistant'], true)) {
+                continue;
+            }
+
             $content = sanitize_textarea_field((string) $entry['content']);
             if ($content === '') {
                 continue;
             }
 
             $messages[] = [
-                'role'    => 'user',
+                'role'    => $entry_role,
                 'content' => $content,
             ];
 
-            if ($content === $message) {
+            if ($entry_role === 'user' && $content === $message) {
                 $current_message_present = true;
             }
         }
@@ -3133,7 +4172,9 @@ EOT;
     // ÃƒÆ’Ã‚Â¢Ãƒâ€¦Ã¢â‚¬Å“ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ API request met retry/backoff + circuit breaker
     $openai_result = octopus_ai_openai_chat_completion_with_retry($api_key, $messages, $model, 3);
     if (is_wp_error($openai_result)) {
-        return $openai_result;
+        $service_reason = $openai_result->get_error_message();
+        error_log('[Octopus AI] OpenAI call mislukt, service fallback actief: ' . $service_reason);
+        return $build_service_fallback_response($service_reason);
     }
 
     $body_json = (string) ($openai_result['body_json'] ?? '');
@@ -3143,7 +4184,8 @@ EOT;
 
     if (!$answer) {
         $error_message = $body['error']['message'] ?? 'Ongeldige API-respons.';
-        return new WP_Error('api_error', 'Fout van OpenAI: ' . $error_message);
+        error_log('[Octopus AI] OpenAI gaf lege/ongeldige response, service fallback actief: ' . $error_message);
+        return $build_service_fallback_response((string) $error_message);
     }
 
     // ÃƒÆ’Ã‚Â¢Ãƒâ€¦Ã¢â‚¬Å“ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ Unicode-decodering via JSON (zoals \u00e9 ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â©)
@@ -3356,6 +4398,10 @@ if (function_exists('octopus_ai_log_interaction')) {
     $chat_id = (int) octopus_ai_log_interaction($message, $answer, $context_length, $status, $error_message);
 }
 
+if (function_exists('delete_transient')) {
+    delete_transient('octopus_ai_last_fatal_error');
+}
+
 return rest_ensure_response([
     'answer' => $answer,
     'chat_id' => $chat_id,
@@ -3377,11 +4423,54 @@ return rest_ensure_response([
 
     } catch (Throwable $exception) {
         error_log('[Octopus AI] Onverwachte chatbot runtime-fout: ' . $exception->getMessage());
-        return new WP_Error(
-            'octopus_ai_runtime_error',
-            __('Technische fout bij het verwerken van het chatbotverzoek.', 'octopus-ai'),
-            ['status' => 500]
-        );
+
+        $runtime_lang = function_exists('octopus_ai_get_request_language')
+            ? octopus_ai_get_request_language()
+            : 'NL';
+        $runtime_message = '';
+        if (is_object($request) && method_exists($request, 'get_param')) {
+            $runtime_message = sanitize_text_field((string) $request->get_param('message'));
+        }
+
+        $runtime_fallback_default = ($runtime_lang === 'FR')
+            ? "Desole, je ne peux pas t'aider avec ca."
+            : get_option('octopus_ai_fallback', 'Sorry, daar kan ik je niet mee helpen.');
+        $runtime_fallback = function_exists('octopus_ai_get_provider_fallback_text')
+            ? octopus_ai_get_provider_fallback_text($runtime_lang, $runtime_fallback_default)
+            : $runtime_fallback_default;
+        $runtime_notice = ($runtime_lang === 'FR')
+            ? "Une erreur technique s'est produite. Voici les liens utiles disponibles."
+            : 'Er is een technische fout opgetreden. Hieronder staan nuttige beschikbare links.';
+
+        if (function_exists('octopus_ai_build_no_solution_answer')) {
+            $runtime_answer = octopus_ai_build_no_solution_answer(
+                $runtime_lang,
+                $runtime_message,
+                $runtime_fallback,
+                [
+                    'references' => [],
+                    'handoff_url' => function_exists('octopus_ai_get_handoff_url') ? octopus_ai_get_handoff_url($runtime_lang) : '',
+                ]
+            );
+        } else {
+            $runtime_answer = $runtime_fallback;
+        }
+
+        $runtime_answer = $runtime_notice . "\n\n" . ltrim((string) $runtime_answer);
+        if (function_exists('octopus_ai_sanitize_answer_output')) {
+            $runtime_answer = octopus_ai_sanitize_answer_output($runtime_answer);
+        }
+
+        return rest_ensure_response([
+            'answer' => (string) $runtime_answer,
+            'chat_id' => 0,
+            'status' => 'runtime_fallback',
+            'confidence' => 0.0,
+            'reference_links' => [],
+            'suggested_topic' => '',
+            'current_topic' => '',
+            'primary_source_url' => '',
+        ]);
     }
 }
 

@@ -10,19 +10,78 @@ if (!function_exists('octopus_ai_normalize_search_text')) {
             return '';
         }
 
-        if (class_exists('Transliterator')) {
-            $transliterator = Transliterator::create('NFD; [:Nonspacing Mark:] Remove; NFC');
-            if ($transliterator) {
-                $string = $transliterator->transliterate($string);
-            }
+        static $normalize_cache = [];
+        static $transliterator = null;
+        static $transliterator_checked = false;
+        $cache_key = $string;
+
+        if (isset($normalize_cache[$cache_key])) {
+            return $normalize_cache[$cache_key];
+        }
+
+        if (function_exists('remove_accents')) {
+            $string = (string) remove_accents($string);
         } else {
-            $converted = @iconv('UTF-8', 'ASCII//TRANSLIT', $string);
-            if ($converted !== false) {
-                $string = $converted;
+            if (!$transliterator_checked) {
+                $transliterator_checked = true;
+                if (class_exists('Transliterator')) {
+                    $candidate = Transliterator::create('NFD; [:Nonspacing Mark:] Remove; NFC');
+                    if ($candidate) {
+                        $transliterator = $candidate;
+                    }
+                }
+            }
+
+            if ($transliterator) {
+                $string = (string) $transliterator->transliterate($string);
+            } else {
+                $converted = @iconv('UTF-8', 'ASCII//TRANSLIT', $string);
+                if ($converted !== false) {
+                    $string = $converted;
+                }
             }
         }
 
-        return strtolower($string);
+        $normalized = strtolower((string) $string);
+        $normalized = trim((string) preg_replace('/\s+/u', ' ', $normalized));
+
+        if (count($normalize_cache) > 3500) {
+            $normalize_cache = array_slice($normalize_cache, -1800, null, true);
+        }
+
+        $normalize_cache[$cache_key] = $normalized;
+        return $normalized;
+    }
+}
+
+if (!function_exists('octopus_ai_get_retrieval_time_budget_seconds')) {
+    function octopus_ai_get_retrieval_time_budget_seconds($fallback_seconds = 8.5)
+    {
+        $fallback_seconds = (float) $fallback_seconds;
+        if ($fallback_seconds <= 0) {
+            $fallback_seconds = 8.5;
+        }
+
+        $max_execution_time = (int) ini_get('max_execution_time');
+        if ($max_execution_time <= 0) {
+            return min(18.0, max(3.0, $fallback_seconds));
+        }
+
+        $budget = min((float) $fallback_seconds, max(3.0, ((float) $max_execution_time * 0.60)));
+        return min(18.0, max(2.5, $budget));
+    }
+}
+
+if (!function_exists('octopus_ai_retrieval_time_budget_exceeded')) {
+    function octopus_ai_retrieval_time_budget_exceeded($started_at, $budget_seconds)
+    {
+        $started_at = (float) $started_at;
+        $budget_seconds = (float) $budget_seconds;
+        if ($started_at <= 0 || $budget_seconds <= 0) {
+            return false;
+        }
+
+        return ((microtime(true) - $started_at) >= $budget_seconds);
     }
 }
 
@@ -607,13 +666,61 @@ if (!function_exists('octopus_ai_get_chunk_index')) {
             ];
         }
 
-        sort($files, SORT_STRING);
+        $total_files_available = count($files);
+        $max_files_to_index = (int) apply_filters(
+            'octopus_ai_retrieval_max_files_to_index',
+            1200,
+            $source_strategy,
+            $total_files_available
+        );
+        $max_files_to_index = max(150, min(5000, $max_files_to_index));
+
+        if ($total_files_available > $max_files_to_index) {
+            usort($files, static function ($a, $b) {
+                return ((int) @filemtime($b)) <=> ((int) @filemtime($a));
+            });
+            $files = array_slice($files, 0, $max_files_to_index);
+        } else {
+            sort($files, SORT_STRING);
+        }
+
+        $index_started_at = microtime(true);
+        $index_budget_seconds = function_exists('octopus_ai_get_retrieval_time_budget_seconds')
+            ? octopus_ai_get_retrieval_time_budget_seconds(5.5)
+            : 5.5;
+        $truncated_by_time = false;
 
         $signature_parts = [];
-        foreach ($files as $file) {
+        foreach ($files as $file_index => $file) {
+            if (
+                ($file_index % 120) === 0 &&
+                function_exists('octopus_ai_retrieval_time_budget_exceeded') &&
+                octopus_ai_retrieval_time_budget_exceeded($index_started_at, $index_budget_seconds)
+            ) {
+                $truncated_by_time = true;
+                break;
+            }
+
             $signature_parts[] = basename($file) . ':' . (int) @filemtime($file) . ':' . (int) @filesize($file);
         }
-        $signature = md5(implode('|', $signature_parts));
+
+        if ($truncated_by_time) {
+            $files = array_slice($files, 0, count($signature_parts));
+        }
+
+        if (empty($files)) {
+            return [
+                'signature' => 'empty',
+                'entries' => [],
+            ];
+        }
+
+        $signature = md5(
+            implode('|', $signature_parts)
+            . '|available:' . (int) $total_files_available
+            . '|indexed:' . (int) count($files)
+            . '|truncated:' . ($truncated_by_time ? '1' : '0')
+        );
         $cache_key = 'octopus_ai_chunk_index_' . md5($chunks_dir . '|' . $source_strategy . '|' . $signature);
 
         $cached = get_transient($cache_key);
@@ -622,7 +729,18 @@ if (!function_exists('octopus_ai_get_chunk_index')) {
         }
 
         $entries = [];
-        foreach ($files as $chunk_file) {
+        $processed_files = 0;
+        $truncated_during_build = false;
+        foreach ($files as $file_index => $chunk_file) {
+            if (
+                ($file_index % 20) === 0 &&
+                function_exists('octopus_ai_retrieval_time_budget_exceeded') &&
+                octopus_ai_retrieval_time_budget_exceeded($index_started_at, $index_budget_seconds)
+            ) {
+                $truncated_during_build = true;
+                break;
+            }
+
             $json_raw = @file_get_contents($chunk_file);
             if ($json_raw === false || $json_raw === '') {
                 continue;
@@ -641,9 +759,9 @@ if (!function_exists('octopus_ai_get_chunk_index')) {
             $metadata = isset($json['metadata']) && is_array($json['metadata']) ? $json['metadata'] : [];
             $content_preview = $content;
             if (function_exists('mb_substr')) {
-                $content_preview = (string) mb_substr($content_preview, 0, 2500);
+                $content_preview = (string) mb_substr($content_preview, 0, 1800);
             } else {
-                $content_preview = (string) substr($content_preview, 0, 2500);
+                $content_preview = (string) substr($content_preview, 0, 1800);
             }
 
             $index_terms = isset($metadata['index_terms']) && is_array($metadata['index_terms'])
@@ -677,11 +795,18 @@ if (!function_exists('octopus_ai_get_chunk_index')) {
                     'index_terms' => $index_terms,
                 ],
             ];
+            $processed_files++;
         }
 
         $result = [
             'signature' => $signature,
             'entries' => $entries,
+            'stats' => [
+                'available_files' => (int) $total_files_available,
+                'indexed_files' => (int) count($files),
+                'processed_files' => (int) $processed_files,
+                'truncated' => (bool) ($truncated_by_time || $truncated_during_build),
+            ],
         ];
 
         // Compacter cachevenster: snel vernieuwen na uploads.
@@ -744,10 +869,32 @@ function octopus_ai_retrieve_relevant_chunks($question, $topic = '')
         ];
     }
 
-    $cache_key = 'octopus_ai_chunks_' . md5('v4||' . $question . '||' . $topic_key . '||' . $source_strategy . '||' . $index_signature);
+    $cache_key = 'octopus_ai_chunks_' . md5('v5||' . $question . '||' . $topic_key . '||' . $source_strategy . '||' . $index_signature);
     $cached = get_transient($cache_key);
     if ($cached && is_array($cached)) {
         return $cached;
+    }
+
+    $retrieval_started_at = microtime(true);
+    $retrieval_budget_seconds = function_exists('octopus_ai_get_retrieval_time_budget_seconds')
+        ? octopus_ai_get_retrieval_time_budget_seconds(7.5)
+        : 7.5;
+    $retrieval_timed_out = false;
+
+    $total_entries = count($entries);
+    $max_entries_to_score = (int) apply_filters(
+        'octopus_ai_retrieval_max_entries_to_score',
+        1800,
+        $topic_key,
+        $source_strategy,
+        $total_entries
+    );
+    $max_entries_to_score = max(250, min(5000, $max_entries_to_score));
+    if ($total_entries > $max_entries_to_score) {
+        usort($entries, static function ($a, $b) {
+            return ((int) ($b['modified'] ?? 0)) <=> ((int) ($a['modified'] ?? 0));
+        });
+        $entries = array_slice($entries, 0, $max_entries_to_score);
     }
 
     $topic_keywords = function_exists('octopus_ai_get_provider_retrieval_topic_keywords_map')
@@ -780,7 +927,16 @@ function octopus_ai_retrieve_relevant_chunks($question, $topic = '')
     $has_intent_signal = $detected_intent !== '' && $intent_confidence > 0.0;
 
     $chunks_with_score = [];
-    foreach ($entries as $entry) {
+    foreach ($entries as $entry_index => $entry) {
+        if (
+            ($entry_index % 25) === 0 &&
+            function_exists('octopus_ai_retrieval_time_budget_exceeded') &&
+            octopus_ai_retrieval_time_budget_exceeded($retrieval_started_at, $retrieval_budget_seconds)
+        ) {
+            $retrieval_timed_out = true;
+            break;
+        }
+
         $score = 0;
         $intent_bonus = 0.0;
         $recency_bonus = 0.0;
@@ -1015,7 +1171,16 @@ function octopus_ai_retrieve_relevant_chunks($question, $topic = '')
         $max_chunks_per_source = ($topic_key !== '') ? 7 : 6;
     }
 
-    foreach ($candidate_entries as $entry) {
+    foreach ($candidate_entries as $candidate_index => $entry) {
+        if (
+            ($candidate_index % 4) === 0 &&
+            function_exists('octopus_ai_retrieval_time_budget_exceeded') &&
+            octopus_ai_retrieval_time_budget_exceeded($retrieval_started_at, $retrieval_budget_seconds)
+        ) {
+            $retrieval_timed_out = true;
+            break;
+        }
+
         $entry_metadata = isset($entry['metadata']) && is_array($entry['metadata']) ? $entry['metadata'] : [];
         $source_key_raw = (string) (
             ($entry_metadata['manual_url'] ?? '')
@@ -1121,6 +1286,27 @@ function octopus_ai_retrieve_relevant_chunks($question, $topic = '')
         }
     }
 
+    if ($context === '' && !empty($chunks_with_score)) {
+        $fallback_entry = $chunks_with_score[0];
+        $fallback_preview = trim((string) ($fallback_entry['content_preview'] ?? ''));
+        if ($fallback_preview !== '') {
+            if (function_exists('mb_substr')) {
+                $context = (string) mb_substr($fallback_preview, 0, 1800);
+            } else {
+                $context = (string) substr($fallback_preview, 0, 1800);
+            }
+        }
+    }
+
+    if ($retrieval_timed_out) {
+        error_log(
+            '[Octopus AI] Retriever time-budget bereikt: entries='
+            . (int) count($entries)
+            . ', candidates=' . (int) count($candidate_entries)
+            . ', budget=' . (float) $retrieval_budget_seconds . 's'
+        );
+    }
+
     $metadata_summary = array_map(static function ($arr) {
         return array_values(array_filter(array_unique($arr)));
     }, $seen);
@@ -1130,6 +1316,11 @@ function octopus_ai_retrieve_relevant_chunks($question, $topic = '')
         'metadata' => [
             'chunks' => $top_chunks_metadata,
             'summary' => $metadata_summary,
+            'retrieval_stats' => [
+                'timed_out' => (bool) $retrieval_timed_out,
+                'entries_scored' => (int) count($entries),
+                'candidates_considered' => (int) count($candidate_entries),
+            ],
         ],
     ];
 

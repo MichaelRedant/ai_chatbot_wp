@@ -23,6 +23,167 @@ function octopus_ai_get_manual_mode()
     return in_array($mode, $allowed, true) ? $mode : 'hybrid';
 }
 
+if (!function_exists('octopus_ai_live_manual_hr_to_bytes')) {
+    /**
+     * Zet shorthand geheugenwaarden (zoals 256M) om naar bytes.
+     *
+     * @param string|int $value
+     * @return int
+     */
+    function octopus_ai_live_manual_hr_to_bytes($value)
+    {
+        $raw = trim((string) $value);
+        if ($raw === '') {
+            return 0;
+        }
+
+        if ($raw === '-1') {
+            return -1;
+        }
+
+        $unit = strtolower(substr($raw, -1));
+        $bytes = (float) $raw;
+        switch ($unit) {
+            case 'g':
+                $bytes *= 1024;
+                // no break
+            case 'm':
+                $bytes *= 1024;
+                // no break
+            case 'k':
+                $bytes *= 1024;
+                break;
+        }
+
+        return (int) max(0, $bytes);
+    }
+}
+
+if (!function_exists('octopus_ai_live_manual_get_memory_limit_bytes')) {
+    /**
+     * Geeft de actuele memory_limit in bytes terug.
+     *
+     * @return int
+     */
+    function octopus_ai_live_manual_get_memory_limit_bytes()
+    {
+        if (function_exists('octopus_ai_get_memory_limit_bytes')) {
+            return (int) octopus_ai_get_memory_limit_bytes();
+        }
+
+        return (int) octopus_ai_live_manual_hr_to_bytes(ini_get('memory_limit'));
+    }
+}
+
+if (!function_exists('octopus_ai_live_manual_get_max_execution_time_seconds')) {
+    /**
+     * Geeft max_execution_time in seconden terug.
+     *
+     * @return int
+     */
+    function octopus_ai_live_manual_get_max_execution_time_seconds()
+    {
+        $raw = ini_get('max_execution_time');
+        if (!is_numeric($raw)) {
+            return 0;
+        }
+
+        return max(0, (int) $raw);
+    }
+}
+
+if (!function_exists('octopus_ai_is_chatbot_rest_request')) {
+    /**
+     * Detecteert chatbot-gerelateerde REST-calls.
+     *
+     * @return bool
+     */
+    function octopus_ai_is_chatbot_rest_request()
+    {
+        $candidates = [];
+        if (isset($_REQUEST['rest_route'])) {
+            $candidates[] = (string) wp_unslash($_REQUEST['rest_route']);
+        }
+        if (isset($_SERVER['REQUEST_URI'])) {
+            $candidates[] = (string) $_SERVER['REQUEST_URI'];
+        }
+
+        foreach ($candidates as $candidate) {
+            $candidate = strtolower(trim((string) $candidate));
+            if ($candidate === '') {
+                continue;
+            }
+
+            if (
+                strpos($candidate, '/octopus-ai/v1/chatbot') !== false ||
+                strpos($candidate, '/octopus-ai/v1/feedback') !== false ||
+                strpos($candidate, 'rest_route=/octopus-ai/v1/chatbot') !== false ||
+                strpos($candidate, 'rest_route=%2foctopus-ai%2fv1%2fchatbot') !== false
+            ) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+}
+
+if (!function_exists('octopus_ai_live_manual_safe_mode')) {
+    /**
+     * Schakelt veilige live-manual limieten in op lage resources of in chatbot REST-context.
+     *
+     * @return bool
+     */
+    function octopus_ai_live_manual_safe_mode()
+    {
+        $forced = apply_filters('octopus_ai_live_manual_safe_mode', null);
+        if (is_bool($forced)) {
+            return $forced;
+        }
+
+        if (octopus_ai_is_chatbot_rest_request()) {
+            return true;
+        }
+
+        $memory_limit = octopus_ai_live_manual_get_memory_limit_bytes();
+        $max_execution_time = octopus_ai_live_manual_get_max_execution_time_seconds();
+        $mb = 1024 * 1024;
+
+        if ($memory_limit > 0 && $memory_limit < (256 * $mb)) {
+            return true;
+        }
+
+        if ($max_execution_time > 0 && $max_execution_time < 30) {
+            return true;
+        }
+
+        return false;
+    }
+}
+
+if (!function_exists('octopus_ai_live_manual_enabled_for_chat_requests')) {
+    /**
+     * Bepaalt of live-manual runtime in chatbot REST-requests actief mag zijn.
+     * Standaard uit om 500 timeouts op productie te voorkomen.
+     *
+     * @param string $lang
+     * @param string $question
+     * @return bool
+     */
+    function octopus_ai_live_manual_enabled_for_chat_requests($lang = 'NL', $question = '')
+    {
+        $enabled_default = false;
+        $enabled = apply_filters(
+            'octopus_ai_live_manual_enable_in_chat_rest',
+            $enabled_default,
+            strtoupper((string) $lang) === 'FR' ? 'FR' : 'NL',
+            (string) $question
+        );
+
+        return (bool) $enabled;
+    }
+}
+
 /**
  * Normaliseert een basis-URL zodat hij altijd met een slash eindigt.
  *
@@ -981,9 +1142,23 @@ if (!function_exists('octopus_ai_crawl_manual_domain_urls')) {
      */
     function octopus_ai_crawl_manual_domain_urls($lang, $max_urls = 220, $max_depth = 2)
     {
-        $max_urls = max(25, (int) $max_urls);
-        $max_depth = max(0, min(4, (int) $max_depth));
-        $time_budget = (float) apply_filters('octopus_ai_live_manual_domain_crawl_time_budget', 12.0, $lang);
+        $safe_mode = octopus_ai_live_manual_safe_mode();
+
+        $default_max_urls = $safe_mode ? 70 : 220;
+        if ((int) $max_urls === 220) {
+            $max_urls = $default_max_urls;
+        }
+        $max_urls = max($safe_mode ? 20 : 25, (int) $max_urls);
+        $max_urls = min($max_urls, $safe_mode ? 110 : 280);
+
+        $default_max_depth = $safe_mode ? 1 : 2;
+        if ((int) $max_depth === 2) {
+            $max_depth = $default_max_depth;
+        }
+        $max_depth = max(0, min($safe_mode ? 2 : 4, (int) $max_depth));
+
+        $default_time_budget = $safe_mode ? 4.0 : 12.0;
+        $time_budget = (float) apply_filters('octopus_ai_live_manual_domain_crawl_time_budget', $default_time_budget, $lang, $safe_mode);
 
         $base_url = trailingslashit(octopus_ai_get_manual_base_url($lang));
         $seed_candidates = [
@@ -1017,7 +1192,7 @@ if (!function_exists('octopus_ai_crawl_manual_domain_urls')) {
 
         $visited = [];
         $found = [];
-        $max_fetches = max($max_urls, 80);
+        $max_fetches = $safe_mode ? max($max_urls, 45) : max($max_urls, 80);
         $started_at = microtime(true);
 
         while (!empty($queue) && count($visited) < $max_fetches && count($found) < $max_urls) {
@@ -1089,11 +1264,15 @@ if (!function_exists('octopus_ai_get_manual_domain_urls')) {
 
         $sitemap_urls = octopus_ai_get_manual_sitemap_urls($lang);
 
-        $crawl_enabled = apply_filters('octopus_ai_live_manual_domain_crawl_enabled', true, $lang);
+        $safe_mode = octopus_ai_live_manual_safe_mode();
+        $crawl_default_enabled = !$safe_mode;
+        $crawl_enabled = apply_filters('octopus_ai_live_manual_domain_crawl_enabled', $crawl_default_enabled, $lang, $safe_mode);
         $crawl_urls = [];
         if ($crawl_enabled) {
-            $crawl_max_urls = (int) apply_filters('octopus_ai_live_manual_domain_crawl_max_urls', 220, $lang);
-            $crawl_max_depth = (int) apply_filters('octopus_ai_live_manual_domain_crawl_max_depth', 2, $lang);
+            $crawl_max_urls_default = $safe_mode ? 70 : 220;
+            $crawl_max_depth_default = $safe_mode ? 1 : 2;
+            $crawl_max_urls = (int) apply_filters('octopus_ai_live_manual_domain_crawl_max_urls', $crawl_max_urls_default, $lang, $safe_mode);
+            $crawl_max_depth = (int) apply_filters('octopus_ai_live_manual_domain_crawl_max_depth', $crawl_max_depth_default, $lang, $safe_mode);
             $crawl_urls = octopus_ai_crawl_manual_domain_urls($lang, $crawl_max_urls, $crawl_max_depth);
         }
 
@@ -1330,6 +1509,16 @@ if (!function_exists('octopus_ai_discover_live_manual_urls')) {
     function octopus_ai_discover_live_manual_urls($question, $lang, $limit = 5)
     {
         $limit = max(1, (int) $limit);
+        $safe_mode = octopus_ai_live_manual_safe_mode();
+        if (
+            function_exists('octopus_ai_is_chatbot_rest_request') &&
+            octopus_ai_is_chatbot_rest_request() &&
+            function_exists('octopus_ai_live_manual_enabled_for_chat_requests') &&
+            !octopus_ai_live_manual_enabled_for_chat_requests($lang, $question)
+        ) {
+            return [];
+        }
+
         $lang_key = strtoupper((string) $lang) === 'FR' ? 'FR' : 'NL';
         $normalized_question = function_exists('octopus_ai_normalize_text_for_compare')
             ? octopus_ai_normalize_text_for_compare((string) $question)
@@ -1344,6 +1533,9 @@ if (!function_exists('octopus_ai_discover_live_manual_urls')) {
         $urls = octopus_ai_get_manual_domain_urls($lang);
         if (empty($urls)) {
             return [];
+        }
+        if ($safe_mode && count($urls) > 650) {
+            $urls = array_slice($urls, 0, 650);
         }
 
         $url_scored = [];
@@ -1372,8 +1564,10 @@ if (!function_exists('octopus_ai_discover_live_manual_urls')) {
             }
         );
 
-        $prefetch_count = (int) apply_filters('octopus_ai_live_manual_discovery_prefetch_count', max(40, $limit * 12), $lang, $question);
-        $prefetch_count = max($limit, min(120, $prefetch_count));
+        $prefetch_default = $safe_mode ? max(10, $limit * 4) : max(40, $limit * 12);
+        $prefetch_cap = $safe_mode ? 20 : 120;
+        $prefetch_count = (int) apply_filters('octopus_ai_live_manual_discovery_prefetch_count', $prefetch_default, $lang, $question, $safe_mode);
+        $prefetch_count = max($limit, min($prefetch_cap, $prefetch_count));
         $prefetch_rows = array_slice($url_scored, 0, $prefetch_count);
 
         $top_url_score = isset($url_scored[0]['score']) ? (float) $url_scored[0]['score'] : 0.0;
@@ -1398,7 +1592,8 @@ if (!function_exists('octopus_ai_discover_live_manual_urls')) {
         $content_scored = [];
         $menu_scored = [];
         $started_at = microtime(true);
-        $time_budget = (float) apply_filters('octopus_ai_live_manual_discovery_time_budget', 10.0, $lang, $question);
+        $time_budget_default = $safe_mode ? 2.8 : 10.0;
+        $time_budget = (float) apply_filters('octopus_ai_live_manual_discovery_time_budget', $time_budget_default, $lang, $question, $safe_mode);
 
         foreach ($prefetch_rows as $row) {
             if ($time_budget > 0 && (microtime(true) - $started_at) >= $time_budget) {
@@ -1586,14 +1781,28 @@ function octopus_ai_download_manual_page($url)
         $user_agent_url = 'https://localhost/';
     }
 
-    $start_time = microtime(true);
-    $response = wp_remote_get($url, [
-        'timeout'     => 8,
+    $safe_mode = octopus_ai_live_manual_safe_mode();
+    $http_timeout_default = $safe_mode ? 3.0 : 8.0;
+    $http_timeout = (float) apply_filters('octopus_ai_live_manual_http_timeout', $http_timeout_default, $url, $safe_mode);
+    $http_timeout = max(2.0, min(20.0, $http_timeout));
+
+    $max_body_bytes_default = $safe_mode ? 750000 : 1500000;
+    $max_body_bytes = (int) apply_filters('octopus_ai_live_manual_http_max_body_bytes', $max_body_bytes_default, $url, $safe_mode);
+    $max_body_bytes = max(200000, $max_body_bytes);
+
+    $request_args = [
+        'timeout'     => $http_timeout,
         'redirection' => 3,
         'headers'     => [
             'User-Agent' => 'OctopusAIChatbot/1.0 (+' . $user_agent_url . ')',
         ],
-    ]);
+    ];
+    if ($max_body_bytes > 0) {
+        $request_args['limit_response_size'] = $max_body_bytes;
+    }
+
+    $start_time = microtime(true);
+    $response = wp_remote_get($url, $request_args);
     $duration = microtime(true) - $start_time;
 
     if ($duration > 3) {
@@ -1614,6 +1823,10 @@ function octopus_ai_download_manual_page($url)
     $status = (int) wp_remote_retrieve_response_code($response);
     $body   = wp_remote_retrieve_body($response);
     $error  = '';
+
+    if ($max_body_bytes > 0 && is_string($body) && strlen($body) > $max_body_bytes) {
+        $body = substr((string) $body, 0, $max_body_bytes);
+    }
 
     if ($status !== 200) {
         $error = wp_remote_retrieve_response_message($response);
@@ -1656,6 +1869,36 @@ function octopus_ai_normalize_manual_text($html)
         return '';
     }
 
+    // Bewaar linkdoelen uit anchors zodat "hier" links niet verloren gaan in platte tekst.
+    $html = preg_replace_callback(
+        '/<a\b[^>]*href\s*=\s*(["\'])(.*?)\1[^>]*>(.*?)<\/a>/is',
+        static function ($matches) {
+            $href_raw = isset($matches[2]) ? html_entity_decode((string) $matches[2], ENT_QUOTES | ENT_HTML5, 'UTF-8') : '';
+            $label = isset($matches[3]) ? trim((string) wp_strip_all_tags((string) $matches[3], true)) : '';
+            $href = trim((string) preg_replace('/\s+/', '', (string) $href_raw));
+
+            if ($href === '') {
+                return $label;
+            }
+
+            $lower = strtolower($href);
+            if (strpos($lower, 'javascript:') === 0 || strpos($lower, 'mailto:') === 0 || strpos($lower, 'tel:') === 0) {
+                return $label;
+            }
+
+            if (preg_match('#^https?://#i', $href)) {
+                $href = esc_url_raw($href);
+            }
+
+            if ($label === '') {
+                return $href;
+            }
+
+            return $label . ' (' . $href . ')';
+        },
+        (string) $html
+    );
+
     $text = wp_strip_all_tags($html, true);
     $text = html_entity_decode($text, ENT_QUOTES | ENT_HTML5, 'UTF-8');
     $text = preg_replace('/\s+/', ' ', $text);
@@ -1675,28 +1918,55 @@ function octopus_ai_normalize_manual_text($html)
 if (!function_exists('octopus_ai_normalize_text_for_compare')) {
     function octopus_ai_normalize_text_for_compare($text)
     {
-        $text = strtolower(trim((string) $text));
-
+        $text = trim((string) $text);
         if ($text === '') {
             return '';
         }
 
-        if (class_exists('Transliterator')) {
-            $transliterator = Transliterator::create('NFD; [:Nonspacing Mark:] Remove; NFC');
-            if ($transliterator) {
-                $text = $transliterator->transliterate($text);
-            }
+        static $normalize_cache = [];
+        static $transliterator = null;
+        static $transliterator_checked = false;
+        $cache_key = $text;
+
+        if (isset($normalize_cache[$cache_key])) {
+            return (string) $normalize_cache[$cache_key];
+        }
+
+        $text = strtolower($text);
+
+        if (function_exists('remove_accents')) {
+            $text = (string) remove_accents($text);
         } else {
-            $converted = @iconv('UTF-8', 'ASCII//TRANSLIT', $text);
-            if ($converted !== false) {
-                $text = $converted;
+            if (!$transliterator_checked) {
+                $transliterator_checked = true;
+                if (class_exists('Transliterator')) {
+                    $candidate = Transliterator::create('NFD; [:Nonspacing Mark:] Remove; NFC');
+                    if ($candidate) {
+                        $transliterator = $candidate;
+                    }
+                }
+            }
+
+            if ($transliterator) {
+                $text = (string) $transliterator->transliterate($text);
+            } else {
+                $converted = @iconv('UTF-8', 'ASCII//TRANSLIT', $text);
+                if ($converted !== false) {
+                    $text = $converted;
+                }
             }
         }
 
-        $text = preg_replace('/[^a-z0-9\s]/', ' ', $text);
-        $text = preg_replace('/\s+/', ' ', $text);
+        $text = preg_replace('/[^a-z0-9\s]/u', ' ', $text);
+        $text = preg_replace('/\s+/u', ' ', $text);
+        $normalized = trim((string) $text);
 
-        return trim((string) $text);
+        if (count($normalize_cache) > 4000) {
+            $normalize_cache = array_slice($normalize_cache, -2000, null, true);
+        }
+        $normalize_cache[$cache_key] = $normalized;
+
+        return $normalized;
     }
 }
 
@@ -1760,6 +2030,22 @@ if (!function_exists('octopus_ai_score_manual_snippet')) {
  */
 function octopus_ai_fetch_live_manual_context(array $metadata_chunks, $lang, $question = '', array $options = [])
 {
+    if (
+        function_exists('octopus_ai_is_chatbot_rest_request') &&
+        octopus_ai_is_chatbot_rest_request() &&
+        function_exists('octopus_ai_live_manual_enabled_for_chat_requests') &&
+        !octopus_ai_live_manual_enabled_for_chat_requests($lang, $question)
+    ) {
+        return [
+            'text'    => '',
+            'sources' => [],
+            'best_source' => '',
+            'best_score'  => 0.0,
+            'snippets' => [],
+            'errors'  => [],
+        ];
+    }
+
     $options = wp_parse_args($options, [
         'strict_live' => false,
         'max_sources' => 5,
@@ -1767,14 +2053,51 @@ function octopus_ai_fetch_live_manual_context(array $metadata_chunks, $lang, $qu
 
     $strict_live = !empty($options['strict_live']);
     $max_sources = max(1, (int) ($options['max_sources'] ?? 5));
+    $safe_mode = function_exists('octopus_ai_live_manual_safe_mode')
+        ? octopus_ai_live_manual_safe_mode()
+        : false;
+
+    if ($safe_mode) {
+        $max_sources = min($max_sources, 2);
+    }
+
+    $time_budget_default = $safe_mode ? 6.0 : 18.0;
+    $time_budget = (float) apply_filters(
+        'octopus_ai_live_manual_context_time_budget',
+        $time_budget_default,
+        $lang,
+        $question,
+        $safe_mode
+    );
+    $time_budget = max(2.5, min(40.0, $time_budget));
+    $started_at = microtime(true);
 
     $urls = $strict_live
         ? octopus_ai_get_manual_priority_urls($lang)
         : octopus_ai_build_manual_urls($metadata_chunks, $lang);
 
-    $discovered_urls = octopus_ai_discover_live_manual_urls($question, $lang, $max_sources);
+    $discovered_urls = [];
+    $discovery_enabled_default = !$safe_mode;
+    $discovery_enabled = (bool) apply_filters(
+        'octopus_ai_live_manual_discovery_enabled',
+        $discovery_enabled_default,
+        $lang,
+        $question,
+        $safe_mode
+    );
+
+    if ($discovery_enabled && ($time_budget <= 0 || (microtime(true) - $started_at) < $time_budget)) {
+        try {
+            $discovered_urls = octopus_ai_discover_live_manual_urls($question, $lang, $max_sources);
+        } catch (Throwable $exception) {
+            error_log('[Octopus AI] Live manual discovery fout: ' . $exception->getMessage());
+        }
+    }
     if (!empty($discovered_urls)) {
         foreach ($discovered_urls as $candidate_url) {
+            if ($time_budget > 0 && (microtime(true) - $started_at) >= $time_budget) {
+                break;
+            }
             if (!in_array($candidate_url, $urls, true)) {
                 $urls[] = $candidate_url;
             }
@@ -1804,6 +2127,15 @@ function octopus_ai_fetch_live_manual_context(array $metadata_chunks, $lang, $qu
     $order           = 0;
 
     foreach ($urls as $url) {
+        if ($time_budget > 0 && (microtime(true) - $started_at) >= $time_budget) {
+            $errors[] = [
+                'url'    => '',
+                'status' => 524,
+                'error'  => 'Live manual context time budget bereikt',
+            ];
+            break;
+        }
+
         $result = octopus_ai_download_manual_page($url);
 
         if ($result['status'] === 200 && $result['body'] !== '') {
