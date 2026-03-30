@@ -576,6 +576,9 @@ document.addEventListener('DOMContentLoaded', function () {
             <span class="chat-header-title">${escapeHtml(this.headerTitle)}</span>
           </div>
           <div class="chat-header-actions">
+            <button id="chat-reset" type="button" aria-label="${escapeHtml(this.i18n.reset_title || 'Reset')}" title="${escapeHtml(this.i18n.reset_title || 'Reset')}" class="chat-header-action chat-reset-button">
+              <span class="chat-reset-icon" aria-hidden="true">&#x21bb;</span>
+            </button>
             <button id="chat-expand" type="button" aria-label="Vergroot chatvenster" class="chat-header-action chat-expand-button" aria-pressed="false">
               <span class="chat-expand-icon" aria-hidden="true">⤢</span>
             </button>
@@ -583,7 +586,6 @@ document.addEventListener('DOMContentLoaded', function () {
           </div>
         </div>
         <div id="chat-messages" role="log" aria-live="polite" aria-relevant="additions text" aria-atomic="false"></div>
-        <button id="chat-reset" type="button" class="chat-reset-button" title="${escapeHtml(this.i18n.reset_title || 'Reset')}">${escapeHtml(this.i18n.reset_button || 'Vernieuw')}</button>
         <div id="chat-input-container">
           <input type="text" id="chat-input" placeholder="${escapeHtml(this.i18n.placeholder || 'Typ je vraag...')}" />
           <button id="chat-send" type="button">${escapeHtml(this.i18n.send || 'Verstuur')}</button>

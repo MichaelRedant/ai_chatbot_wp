@@ -449,7 +449,7 @@ if (!function_exists('octopus_ai_chatbot_safe_callback')) {
                 }
             }
 
-            $relevant_found = (trim((string) $context) !== '' && strlen((string) $context) > 20) || !empty($metadata_chunks);
+            $relevant_found = (trim((string) $context) !== '' && strlen((string) $context) > 10) || !empty($metadata_chunks);
             $topic_for_reference = $effective_topic !== '' ? $effective_topic : $retrieval_topic;
             $selected_reference_links = [];
             $include_reference_links = (bool) apply_filters(
@@ -516,8 +516,8 @@ if (!function_exists('octopus_ai_chatbot_safe_callback')) {
             }
             $strict_no_solution = octopus_ai_get_no_solution_message($lang, $fallback);
             $strict_rule = ($lang === 'FR')
-                ? "Regle anti-hallucination: n'invente rien. Si la solution n'est pas explicitement presente dans le contexte, reponds exactement: \"" . $strict_no_solution . "\""
-                : "Strikte anti-hallucinatie regel: verzin niets. Als de oplossing niet expliciet in de context staat, antwoord exact: \"" . $strict_no_solution . "\"";
+                ? "Regle de fiabilite: n'invente rien. Si la solution n'est pas explicitement presente dans le contexte, donne l'etape la plus plausible basee sur le contexte disponible et pose une courte question de clarification. Utilise la reponse stricte suivante uniquement en dernier recours: \"" . $strict_no_solution . "\""
+                : "Betrouwbaarheidsregel: verzin niets. Als de oplossing niet expliciet in de context staat, geef de meest waarschijnlijke vervolgstap op basis van de beschikbare context en stel een korte verduidelijkingsvraag. Gebruik volgend strikt antwoord alleen als laatste redmiddel: \"" . $strict_no_solution . "\"";
             $system_prompt .= "\n\n" . $strict_rule;
 
             if (!empty($effective_query_data['used_history']) && !empty($effective_query_data['previous_user_message'])) {
@@ -580,8 +580,8 @@ if (!function_exists('octopus_ai_chatbot_safe_callback')) {
                 ];
             }
 
-            $openai_attempts = (int) apply_filters('octopus_ai_safe_chat_openai_attempts', 1, $lang, $model);
-            $openai_timeout = (int) apply_filters('octopus_ai_safe_chat_openai_timeout', 12, $lang, $model);
+            $openai_attempts = (int) apply_filters('octopus_ai_safe_chat_openai_attempts', 3, $lang, $model);
+            $openai_timeout = (int) apply_filters('octopus_ai_safe_chat_openai_timeout', 20, $lang, $model);
             $openai_result = octopus_ai_openai_chat_completion_with_retry(
                 $api_key,
                 $messages,
@@ -589,6 +589,24 @@ if (!function_exists('octopus_ai_chatbot_safe_callback')) {
                 $openai_attempts,
                 $openai_timeout
             );
+            if (is_wp_error($openai_result)) {
+                $fallback_model = apply_filters('octopus_ai_safe_chat_fallback_model', 'gpt-4o-mini', $model, $lang);
+                $fallback_model = sanitize_text_field((string) $fallback_model);
+                if ($fallback_model !== '' && $fallback_model !== $model) {
+                    $retry_attempts = max(1, min(3, $openai_attempts));
+                    $retry_timeout = max(10, min(30, $openai_timeout));
+                    $retry_result = octopus_ai_openai_chat_completion_with_retry(
+                        $api_key,
+                        $messages,
+                        $fallback_model,
+                        $retry_attempts,
+                        $retry_timeout
+                    );
+                    if (!is_wp_error($retry_result)) {
+                        $openai_result = $retry_result;
+                    }
+                }
+            }
             if (is_wp_error($openai_result)) {
                 $service_reason = $openai_result->get_error_message();
                 error_log('[Octopus AI] Safe callback OpenAI service fallback actief: ' . $service_reason);
@@ -599,7 +617,7 @@ if (!function_exists('octopus_ai_chatbot_safe_callback')) {
                 $service_fallback = octopus_ai_build_no_solution_answer(
                     $lang,
                     $reference_query !== '' ? $reference_query : $message,
-                    $fallback,
+                    '',
                     [
                         'references' => $selected_reference_links,
                         'handoff_url' => function_exists('octopus_ai_get_handoff_url') ? octopus_ai_get_handoff_url($lang) : '',
@@ -610,10 +628,29 @@ if (!function_exists('octopus_ai_chatbot_safe_callback')) {
                     $service_fallback = rtrim((string) $service_fallback) . "\n\n" . $topic_mismatch_notice;
                 }
                 $service_fallback = octopus_ai_sanitize_answer_output($service_fallback);
+                if (!function_exists('octopus_ai_log_interaction')) {
+                    require_once plugin_dir_path(__FILE__) . 'logger.php';
+                }
+                $service_chat_id = 0;
+                if (function_exists('octopus_ai_log_interaction')) {
+                    $context_length = strlen((string) $context);
+                    $error_payload = wp_json_encode([
+                        'reason' => 'safe_service_fallback',
+                        'service_reason' => (string) $service_reason,
+                        'model' => (string) $model,
+                    ]);
+                    $service_chat_id = (int) octopus_ai_log_interaction(
+                        $message,
+                        $service_fallback,
+                        $context_length,
+                        'fail',
+                        (string) $error_payload
+                    );
+                }
 
                 return rest_ensure_response([
                     'answer' => $service_fallback,
-                    'chat_id' => 0,
+                    'chat_id' => $service_chat_id,
                     'status' => 'service_fallback',
                     'confidence' => 0.0,
                     'reference_links' => $selected_reference_links,
@@ -712,6 +749,21 @@ if (!function_exists('octopus_ai_chatbot_safe_callback')) {
             }
 
             $is_fallback = stripos((string) $answer, (string) $fallback) !== false || strlen(trim((string) $answer)) < 10;
+            $confidence = $is_fallback ? 0.0 : (!empty($metadata_chunks) ? 0.78 : 0.62);
+            $confidence_threshold = function_exists('octopus_ai_get_confidence_threshold')
+                ? (float) octopus_ai_get_confidence_threshold()
+                : 0.55;
+            $effective_confidence_threshold = max(0.20, $confidence_threshold - 0.10);
+            $confidence_shortfall = (!$is_fallback && $confidence < $effective_confidence_threshold);
+
+            if ($confidence_shortfall) {
+                $clarification_note = ($lang === 'FR')
+                    ? "Si ce n'est pas exactement ta situation, precise l'ecran ou l'etape bloquante et je te donne la suite."
+                    : 'Als dit niet exact jouw situatie is, geef het scherm of de blokkende stap mee en ik geef meteen het vervolg.';
+                $answer = rtrim((string) $answer) . "\n\n" . $clarification_note;
+                $answer = octopus_ai_sanitize_answer_output((string) $answer);
+            }
+
             $status = $is_fallback ? 'fail' : 'success';
             $chat_id = 0;
             if (function_exists('octopus_ai_log_interaction')) {
@@ -722,8 +774,6 @@ if (!function_exists('octopus_ai_chatbot_safe_callback')) {
             if (function_exists('delete_transient')) {
                 delete_transient('octopus_ai_last_fatal_error');
             }
-
-            $confidence = $is_fallback ? 0.0 : (!empty($metadata_chunks) ? 0.78 : 0.62);
 
             return rest_ensure_response([
                 'answer' => (string) $answer,
@@ -2492,30 +2542,41 @@ if (!function_exists('octopus_ai_is_in_scope_question')) {
             }
         }
 
-        if ($contains_any($normalized, $brand_terms)) {
+        $has_brand_match = $contains_any($normalized, $brand_terms);
+        if ($has_brand_match) {
             return true;
         }
 
-        if ($contains_any($normalized, $domain_terms)) {
+        $has_domain_match = $contains_any($normalized, $domain_terms);
+        if ($has_domain_match) {
             return true;
         }
 
-        if ($topic !== '' && isset($topic_terms[$topic]) && $contains_any($normalized, $topic_terms[$topic])) {
+        $has_topic_match = ($topic !== '' && isset($topic_terms[$topic]) && $contains_any($normalized, $topic_terms[$topic]));
+        if ($has_topic_match) {
             return true;
-        }
-
-        if ($contains_any($normalized, $off_topic_terms)) {
-            return false;
         }
 
         $has_history = is_array($history) && !empty($history);
         $normalized_length = function_exists('octopus_ai_string_length')
             ? octopus_ai_string_length($normalized)
             : strlen((string) $normalized);
+        $has_followup_question = (bool) preg_match('/\b(hoe|waar|welke|wat|kan|mag|moet|comment|ou|quel|quelle|puis|peux|dois|faut)\b/u', $normalized);
+        $has_off_topic_match = $contains_any($normalized, $off_topic_terms);
+
+        // In actieve gesprekken behandelen we korte vervolgvragen soepeler.
+        if ($has_off_topic_match) {
+            if (!$has_history || ($normalized_length > 140 && !$has_followup_question)) {
+                return false;
+            }
+        }
+
         if (
             $has_history &&
-            $normalized_length <= 80 &&
-            preg_match('/\b(hoe|waar|welke|wat|kan|mag|moet|comment|ou|quel|quelle|puis|peux|dois|faut)\b/u', $normalized)
+            (
+                $normalized_length <= 120 ||
+                $has_followup_question
+            )
         ) {
             return true;
         }
@@ -2798,7 +2859,7 @@ if (!function_exists('octopus_ai_mark_openai_failure')) {
 
         // Open het circuit tijdelijk na opeenvolgende fouten.
         if ((int) $state['failures'] >= 5) {
-            $state['open_until'] = time() + (5 * MINUTE_IN_SECONDS);
+            $state['open_until'] = time() + 90;
         }
 
         octopus_ai_set_openai_circuit_state($state);
@@ -2914,6 +2975,23 @@ if (!function_exists('octopus_ai_openai_chat_completion_with_retry')) {
             : __('Onbekende fout van de AI-service.', 'octopus-ai');
         $status_for_client = ($last_status_code >= 400 && $last_status_code < 600) ? $last_status_code : 502;
 
+        // Model-fallback: sommige omgevingen hebben geen toegang tot het gekozen model.
+        $fallback_model = apply_filters('octopus_ai_openai_fallback_model', 'gpt-4o-mini', $model, $last_status_code, $error_message);
+        $fallback_model = sanitize_text_field((string) $fallback_model);
+        $is_model_error = (
+            in_array((int) $last_status_code, [400, 404], true) &&
+            stripos((string) $error_message, 'model') !== false
+        );
+        if ($is_model_error && $fallback_model !== '' && $fallback_model !== (string) $model) {
+            return octopus_ai_openai_chat_completion_with_retry(
+                $api_key,
+                $messages,
+                $fallback_model,
+                1,
+                $timeout_seconds
+            );
+        }
+
         return new WP_Error(
             'api_error',
             sprintf(__('Fout van OpenAI (HTTP %1$d): %2$s', 'octopus-ai'), $last_status_code, $error_message),
@@ -2925,7 +3003,13 @@ if (!function_exists('octopus_ai_openai_chat_completion_with_retry')) {
 // ÃƒÆ’Ã‚Â¢Ãƒâ€¦Ã¢â‚¬Å“ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ Chatbot callback
 function octopus_ai_chatbot_callback($request)
 {
-    if (function_exists('octopus_ai_chatbot_safe_callback')) {
+    if (
+        function_exists('octopus_ai_chatbot_safe_callback') &&
+        (
+            !function_exists('octopus_ai_chatbot_safe_mode_enabled') ||
+            octopus_ai_chatbot_safe_mode_enabled($request)
+        )
+    ) {
         return octopus_ai_chatbot_safe_callback($request);
     }
 
@@ -3733,8 +3817,8 @@ EOT;
     }
     $strict_no_solution = octopus_ai_get_no_solution_message($lang, $fallback);
     $strict_rule = ($lang === 'FR')
-        ? "Regle anti-hallucination: n'invente rien. Si la solution n'est pas explicitement presente dans le contexte fourni, reponds exactement: \"" . $strict_no_solution . "\""
-        : "Strikte anti-hallucinatie regel: verzin niets. Als de oplossing niet expliciet in de beschikbare context staat, antwoord exact: \"" . $strict_no_solution . "\"";
+        ? "Regle de fiabilite: n'invente rien. Si la solution n'est pas explicitement presente dans le contexte fourni, donne l'etape la plus plausible basee sur le contexte disponible et pose une courte question de clarification. Utilise la reponse stricte suivante uniquement en dernier recours: \"" . $strict_no_solution . "\""
+        : "Betrouwbaarheidsregel: verzin niets. Als de oplossing niet expliciet in de beschikbare context staat, geef de meest waarschijnlijke vervolgstap op basis van de beschikbare context en stel een korte verduidelijkingsvraag. Gebruik volgend strikt antwoord alleen als laatste redmiddel: \"" . $strict_no_solution . "\"";
     $system_prompt .= "\n\n" . $strict_rule;
     $system_prompt .= "\n\nOpmerking:\nAls de gebruiker bevestigt dat hij verder geholpen wil worden (bijv. zegt 'ja'), geef dan een inhoudelijk vervolg op het onderwerp, niet een algemene begroeting of herstart.";
     if (!empty($effective_query_data['used_history']) && !empty($effective_query_data['previous_user_message'])) {
@@ -4069,7 +4153,6 @@ EOT;
         $lang,
         $message,
         $reference_query,
-        $fallback,
         $selected_reference_links,
         $topic_mismatch_notice,
         $topic_mismatch,
@@ -4085,7 +4168,7 @@ EOT;
         $fallback_answer = octopus_ai_build_no_solution_answer(
             $lang,
             $reference_query !== '' ? $reference_query : $message,
-            $fallback,
+            '',
             [
                 'references' => $selected_reference_links,
                 'handoff_url' => function_exists('octopus_ai_get_handoff_url') ? octopus_ai_get_handoff_url($lang) : '',

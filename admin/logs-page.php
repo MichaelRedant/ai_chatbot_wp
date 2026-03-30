@@ -64,10 +64,57 @@ $total_items = $wpdb->get_var($wpdb->prepare("SELECT COUNT(*) FROM {$table_name}
 
     $top_ips = $wpdb->get_results("SELECT ip_address, COUNT(*) as count FROM {$table_name} GROUP BY ip_address ORDER BY count DESC LIMIT 5");
     $top_questions = $wpdb->get_results("SELECT vraag, COUNT(*) as count FROM {$table_name} GROUP BY vraag ORDER BY count DESC LIMIT 5");
+    $render_log_text = static function ($text, $preview_chars = 220) {
+        $text = trim((string) $text);
+        if ($text === '') {
+            return '<span class="description">-</span>';
+        }
+
+        $preview_chars = max(60, (int) $preview_chars);
+        $length = function_exists('mb_strlen')
+            ? mb_strlen($text, 'UTF-8')
+            : strlen($text);
+
+        $is_truncated = $length > $preview_chars;
+        $preview = $text;
+        if ($is_truncated) {
+            $preview = function_exists('mb_substr')
+                ? mb_substr($text, 0, $preview_chars, 'UTF-8')
+                : substr($text, 0, $preview_chars);
+            $preview = rtrim((string) $preview) . '...';
+        }
+
+        $preview_html = nl2br(esc_html($preview));
+        if (!$is_truncated) {
+            return '<div class="octopus-log-cell-text">' . $preview_html . '</div>';
+        }
+
+        $full_html = esc_html($text);
+        return '<div class="octopus-log-cell-text">' . $preview_html . '</div>'
+            . '<details class="octopus-log-details"><summary>Meer lezen</summary><pre>' . $full_html . '</pre></details>';
+    };
 
     ?>
     <div class="wrap">
         <h1>📊 Octopus AI Logging Dashboard</h1>
+
+        <style>
+            .octopus-log-table td { vertical-align: top; }
+            .octopus-log-cell-text { white-space: pre-wrap; word-break: break-word; }
+            .octopus-log-details { margin-top: 6px; }
+            .octopus-log-details summary { cursor: pointer; color: #0f6c95; font-weight: 600; }
+            .octopus-log-details pre {
+                margin-top: 8px;
+                white-space: pre-wrap;
+                word-break: break-word;
+                max-height: 300px;
+                overflow: auto;
+                background: #f6f7f7;
+                border: 1px solid #dcdcde;
+                border-radius: 4px;
+                padding: 10px;
+            }
+        </style>
 
         <form method="get" style="margin-bottom: 15px;">
             <input type="hidden" name="page" value="octopus-ai-chatbot-logs" />
@@ -123,7 +170,7 @@ $total_items = $wpdb->get_var($wpdb->prepare("SELECT COUNT(*) FROM {$table_name}
         </table>
 
         <h2>📋 Gedetailleerde logs</h2>
-        <table class="widefat fixed striped">
+        <table class="widefat fixed striped octopus-log-table">
             <thead>
                 <tr>
                     <th>📅 Datum</th>
@@ -140,8 +187,8 @@ $total_items = $wpdb->get_var($wpdb->prepare("SELECT COUNT(*) FROM {$table_name}
                     <?php foreach ($logs as $log): ?>
                         <tr>
                             <td><?php echo esc_html($log->datum); ?></td>
-                            <td><?php echo esc_html(wp_trim_words($log->vraag, 10)); ?></td>
-                            <td><?php echo esc_html(wp_trim_words($log->antwoord, 15)); ?></td>
+                            <td><?php echo $render_log_text($log->vraag, 180); ?></td>
+                            <td><?php echo $render_log_text($log->antwoord, 260); ?></td>
                             <td><?php echo intval($log->context_lengte); ?> tekens</td>
                             <td><?php echo $log->status === 'success' ? '✅' : '❌'; ?></td>
                             <td><?php echo esc_html($log->ip_address); ?></td>

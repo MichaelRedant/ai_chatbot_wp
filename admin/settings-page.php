@@ -3181,7 +3181,7 @@ function octopus_ai_settings_page() {
                     <th>Confidence drempel (%)</th>
                     <td>
                         <input type="number" name="octopus_ai_confidence_threshold" min="0" max="100" step="1" value="<?php echo esc_attr($confidence_threshold); ?>" style="width: 120px;" />
-                        <p class="description">Bij lagere confidence geeft de chatbot geen gokantwoord, maar een veilige fallback met handleidinglinks.</p>
+                        <p class="description">Bij lagere confidence wordt het antwoord voorzichtiger (extra verduidelijking of fallback met handleidinglinks), zodat de chatbot minder snel fout gokt.</p>
                     </td>
                 </tr>
                 <tr>

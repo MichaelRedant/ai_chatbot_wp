@@ -224,13 +224,119 @@ body.octopus-chat-expanded {
 }
 
 .octopus-chatbot-embed-root .chat-reset-button {
-    margin: 6px 12px 0;
+    margin: 0;
 }
 
 .octopus-chatbot-embed-root #chat-input-container {
     padding: 10px;
     background: #ffffff;
     border-top: 1px solid rgba(15, 108, 149, 0.12);
+}
+
+/* Bescherm ingebedde widget tegen globale Elementor style overrides. */
+.elementor .octopus-chatbot-embed-root #octopus-chatbot,
+.elementor .octopus-chatbot-embed-root #octopus-chatbot *,
+.elementor-page .octopus-chatbot-embed-root #octopus-chatbot,
+.elementor-page .octopus-chatbot-embed-root #octopus-chatbot * {
+    box-sizing: border-box !important;
+}
+
+.elementor .octopus-chatbot-embed-root #octopus-chatbot,
+.elementor-page .octopus-chatbot-embed-root #octopus-chatbot {
+    font-family: var(--octopus-chat-font-family) !important;
+}
+
+.elementor .octopus-chatbot-embed-root #octopus-chatbot p,
+.elementor .octopus-chatbot-embed-root #octopus-chatbot span,
+.elementor .octopus-chatbot-embed-root #octopus-chatbot div,
+.elementor .octopus-chatbot-embed-root #octopus-chatbot button,
+.elementor .octopus-chatbot-embed-root #octopus-chatbot input,
+.elementor .octopus-chatbot-embed-root #octopus-chatbot a,
+.elementor .octopus-chatbot-embed-root #octopus-chatbot li,
+.elementor-page .octopus-chatbot-embed-root #octopus-chatbot p,
+.elementor-page .octopus-chatbot-embed-root #octopus-chatbot span,
+.elementor-page .octopus-chatbot-embed-root #octopus-chatbot div,
+.elementor-page .octopus-chatbot-embed-root #octopus-chatbot button,
+.elementor-page .octopus-chatbot-embed-root #octopus-chatbot input,
+.elementor-page .octopus-chatbot-embed-root #octopus-chatbot a,
+.elementor-page .octopus-chatbot-embed-root #octopus-chatbot li {
+    font-family: inherit !important;
+    text-transform: none !important;
+    letter-spacing: normal !important;
+}
+
+/* Houd kernlayout en kleuren stabiel wanneer Elementor globale widgetstijlen zet. */
+html body .octopus-chatbot-floating-root #chat-header,
+html body .octopus-chatbot-embed-root #chat-header {
+    background-color: var(--primary-color) !important;
+    background-image: linear-gradient(135deg, rgba(255, 255, 255, 0.16), rgba(255, 255, 255, 0)) !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: space-between !important;
+}
+
+html body .octopus-chatbot-floating-root .chat-header-inner,
+html body .octopus-chatbot-embed-root .chat-header-inner {
+    display: flex !important;
+    align-items: center !important;
+    min-width: 0;
+    flex: 1 1 auto;
+    gap: 8px;
+}
+
+html body .octopus-chatbot-floating-root .chat-header-actions,
+html body .octopus-chatbot-embed-root .chat-header-actions {
+    margin-left: 8px;
+    display: inline-flex !important;
+    align-items: center !important;
+    justify-content: flex-end !important;
+    flex: 0 0 auto;
+}
+
+.elementor .octopus-chatbot-embed-root #chat-send,
+.elementor-page .octopus-chatbot-embed-root #chat-send,
+.elementor .octopus-chatbot-embed-root #chat-reset:not([style*="display: none"]),
+.elementor-page .octopus-chatbot-embed-root #chat-reset:not([style*="display: none"]),
+.elementor .octopus-chatbot-embed-root #chat-expand,
+.elementor-page .octopus-chatbot-embed-root #chat-expand,
+.elementor .octopus-chatbot-embed-root .topic-option,
+.elementor-page .octopus-chatbot-embed-root .topic-option,
+.elementor .octopus-chatbot-embed-root .topic-quickpick-btn,
+.elementor-page .octopus-chatbot-embed-root .topic-quickpick-btn,
+.elementor .octopus-chatbot-embed-root .topic-change-button,
+.elementor-page .octopus-chatbot-embed-root .topic-change-button,
+.elementor .octopus-chatbot-embed-root .octopus-feedback-btn,
+.elementor-page .octopus-chatbot-embed-root .octopus-feedback-btn {
+    -webkit-appearance: none !important;
+    appearance: none !important;
+    text-transform: none !important;
+    letter-spacing: normal !important;
+    visibility: visible !important;
+    font-family: inherit !important;
+}
+
+.elementor .octopus-chatbot-embed-root #chat-send,
+.elementor-page .octopus-chatbot-embed-root #chat-send {
+    display: inline-flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    white-space: nowrap !important;
+}
+
+.elementor .octopus-chatbot-embed-root #chat-reset:not([style*="display: none"]),
+.elementor-page .octopus-chatbot-embed-root #chat-reset:not([style*="display: none"]),
+.elementor .octopus-chatbot-embed-root #chat-expand,
+.elementor-page .octopus-chatbot-embed-root #chat-expand {
+    display: inline-flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    width: 28px !important;
+    height: 28px !important;
+    min-width: 28px !important;
+    min-height: 28px !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    line-height: 1 !important;
 }
 
 /* ==========================================================================
@@ -579,6 +685,13 @@ body.octopus-chat-expanded {
     transform: translateY(-0.5px);
 }
 
+#chat-reset .chat-reset-icon {
+    font-size: 14px;
+    line-height: 1;
+    transform: translateY(-0.5px);
+    display: block;
+}
+
 #chat-close {
     font-size: 18px;
     line-height: 1;
@@ -788,21 +901,28 @@ body.octopus-chat-expanded {
 }
 
 .chat-reset-button {
-    background: transparent;
-    border: none;
-    color: var(--primary-color);
-    font-size: 12px;
-    padding: 6px 12px;
+    width: 28px;
+    height: 28px;
+    padding: 0;
+    margin: 0;
+    border-radius: 999px;
+    border: 1px solid rgba(255, 255, 255, 0.48);
+    background: rgba(255, 255, 255, 0.2);
+    color: var(--header-text-color);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
     cursor: pointer;
-    text-align: left;
-    margin: 4px 10px 0;
-    font-weight: bold;
-    opacity: 0.7;
+    font-weight: 600;
+    line-height: 1;
+    opacity: 1;
+    transition: transform var(--chat-fast) ease, opacity var(--chat-fast) ease, background var(--chat-fast) ease, border-color var(--chat-fast) ease;
 }
 
 .chat-reset-button:hover {
-    opacity: 1;
-    text-decoration: underline;
+    transform: translateY(-1px);
+    background: rgba(255, 255, 255, 0.28);
+    border-color: rgba(255, 255, 255, 0.62);
 }
 
 
@@ -942,7 +1062,9 @@ body.octopus-chat-expanded {
     opacity: 1;
 }
 .octopus-feedback {
-    display: inline-flex;
+    display: flex;
+    justify-content: center;
+    width: 100%;
     gap: 6px;
     margin-top: 8px;
     align-items: center;
@@ -955,6 +1077,11 @@ body.octopus-chat-expanded {
     border-radius: 999px;
     width: 30px;
     height: 30px;
+    padding: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 16px;
     line-height: 1;
     cursor: pointer;
     transition: transform 0.2s ease, background 0.2s ease, border-color 0.2s ease, opacity 0.2s ease;
@@ -974,6 +1101,9 @@ body.octopus-chat-expanded {
 }
 
 .octopus-feedback-note {
+    display: block;
+    width: 100%;
+    text-align: center;
     font-size: 12px;
     color: #2f3e47;
 }
